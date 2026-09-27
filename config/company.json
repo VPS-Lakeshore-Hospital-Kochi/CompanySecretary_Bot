@@ -1,0 +1,24 @@
+{
+  "name": "Lakeshore Hospital & Research Centre Ltd",
+  "brand": "VPS Lakeshore",
+  "cin": "U85110KL1996PLC010235",
+  "registered_office": "XVI/612, Nettoor P.O., Maradu, Kochi 682 040, Kerala",
+  "company_type": "Public limited company (unlisted - please confirm in Settings)",
+  "parent": "VPS Healthcare group",
+  "pan": "",
+  "gstin": "",
+  "fy_end": "31 March",
+  "cs_name": "",
+  "signatory": "",
+  "notes": "Tertiary care multi-speciality hospital in Kochi. Specialities include oncology, cardiac sciences, neurosciences, orthopaedics, gastroenterology and liver, and organ transplant. Board: +91 484 270 1032. Legal: legal@lakeshorehospital.org. Web: lakeshorehospital.org.",
+  "flags": {
+    "unlisted_public": true,
+    "listed": false,
+    "foreign_investment": true,
+    "csr": true,
+    "cost_audit": true,
+    "secretarial_audit": true,
+    "pcpndt": true,
+    "track_tax_labour": false
+  }
+}

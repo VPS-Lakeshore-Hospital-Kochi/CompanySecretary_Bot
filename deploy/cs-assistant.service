@@ -1,0 +1,16 @@
+# systemd unit, for running without Docker on a Linux server.
+# Copy the folder to /opt/cs-assistant, create the .venv there, then:
+#   sudo cp deploy/cs-assistant.service /etc/systemd/system/ && sudo systemctl enable --now cs-assistant
+[Unit]
+Description=CS Assistant (Company Secretariat & Legal)
+After=network.target
+
+[Service]
+User=csapp
+WorkingDirectory=/opt/cs-assistant
+EnvironmentFile=/opt/cs-assistant/.env
+ExecStart=/opt/cs-assistant/.venv/bin/gunicorn --bind 127.0.0.1:8080 --workers 1 --threads 32 --worker-class gthread --timeout 0 app:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

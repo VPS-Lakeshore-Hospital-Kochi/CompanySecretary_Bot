@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CS Assistant · VPS Lakeshore</title>
+  <link rel="icon" href="/static/brand/logo-lakeshore-colour.png">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <img class="logo" src="/static/brand/logo-lakeshore-white.png" alt="VPS Lakeshore" onclick="go('home')" title="Go to the home screen">
+    <div class="brand" onclick="go('home')" title="Go to the home screen">
+      <span class="lbl" id="company-name">Company Secretariat &amp; Legal</span>
+      <span class="name">CS Assistant</span></div>
+    <div class="spacer"></div>
+    <button onclick="go('home')">Home</button>
+    <button onclick="fontSize(-1)" title="Make text smaller" aria-label="Smaller text">A&minus;</button>
+    <button onclick="fontSize(1)" title="Make text bigger" aria-label="Bigger text">A+</button>
+    <button onclick="go('help')">Help</button>
+    <button id="who" onclick="signOut()" hidden>Sign out</button>
+  </header>
+  <main id="app"></main>
+  <footer class="note">The assistant can make mistakes and the law changes often. Check important points
+    against the Act, the MCA / regulator portal or your advocate before acting.</footer>
+
+  <dialog id="dlg"></dialog>
+  <script src="/static/app.js"></script>
+</body>
+</html>
