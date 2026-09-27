@@ -130,10 +130,10 @@ function makeUploader(box, opts = {}) {
       <p style="margin:0 0 0.6rem"><strong>Drag the file here</strong>, or</p>
       <label class="btn">Choose file from computer<input type="file" multiple hidden
         accept=".pdf,.docx,.doc,.txt,.md,.png,.jpg,.jpeg,.webp"></label>
-      <p class="meta" style="margin:0.6rem 0 0;color:var(--gray);font-size:0.9rem">PDF, Word (.docx), scanned picture (JPG / PNG) or text. Up to 25 MB each.</p>
+      <p class="meta" style="margin:0.6rem 0 0;color:var(--slate);font-size:0.9rem">PDF, Word (.docx), scanned picture (JPG / PNG) or text. Up to 25 MB each.</p>
     </div>
     <ul class="filelist"></ul>
-    <details ${opts.pasteOpen ? "open" : ""}><summary style="cursor:pointer;color:var(--blue-dark);font-weight:600;margin-top:0.5rem">Or paste the text instead</summary>
+    <details ${opts.pasteOpen ? "open" : ""}><summary style="cursor:pointer;color:var(--navy);font-weight:600;margin-top:0.5rem">Or paste the text instead</summary>
       <textarea class="paste" placeholder="Paste the text of the document here"></textarea></details>
     <div class="uperr"></div>`;
   const input = box.querySelector("input[type=file]"), list = box.querySelector(".filelist"), err = box.querySelector(".uperr");
@@ -238,17 +238,18 @@ async function runTurn(session, area) {
   paint();
   if (text) {
     session.turns.push({ role: "assistant", text });
-    addActions(turn.querySelector(".actions"), () => text, session.title, session.mode, t => { text = t; paint(); session.turns[session.turns.length - 1].text = t; });
+    addActions(turn.querySelector(".actions"), () => text, session.title, session.mode,
+      t => { text = t; paint(); session.turns[session.turns.length - 1].text = t; }, session.form && session.form.type);
   } else if (!failed) {
     turn.querySelector(".notices").appendChild(h(`<div class="banner warn">No answer came back. Please try again.</div>`));
   }
   return text;
 }
 
-function addActions(row, getText, title, kind, onEdit) {
+function addActions(row, getText, title, kind, onEdit, docType) {
   row.hidden = false;
   const b = (label, fn, cls = "light") => { const x = h(`<button class="btn ${cls}">${label}</button>`); x.onclick = fn; row.appendChild(x); return x; };
-  b("Download as Word", () => downloadWord(getText(), title));
+  b("Download as Word", () => downloadWord(getText(), title, kind, docType));
   b("Print", () => printMd(getText(), title));
   b("Copy", async () => {
     try { await navigator.clipboard.writeText(getText()); }
@@ -262,7 +263,7 @@ function addActions(row, getText, title, kind, onEdit) {
   if (onEdit) b("Edit the text", () => {
     const d = document.getElementById("dlg");
     d.style.maxWidth = "1000px";
-    d.innerHTML = `<h2 style="margin-top:0">Edit the text</h2><p style="color:var(--gray);font-size:0.9rem">Change anything you like, then press Save changes. Lines starting with # are headings.</p>
+    d.innerHTML = `<h2 style="margin-top:0">Edit the text</h2><p style="color:var(--slate);font-size:0.9rem">Change anything you like, then press Save changes. Lines starting with # are headings.</p>
       <textarea class="editbox"></textarea><div class="btn-row"><button class="btn">Save changes</button><button class="btn light">Cancel</button></div>`;
     d.querySelector("textarea").value = getText();
     const [save, cancel] = d.querySelectorAll(".btn-row button");
@@ -272,8 +273,9 @@ function addActions(row, getText, title, kind, onEdit) {
   });
 }
 
-async function downloadWord(markdown, title) {
-  const r = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ markdown, title }) });
+async function downloadWord(markdown, title, kind, docType) {
+  const r = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ markdown, title, kind: kind === "ask" ? "answer" : kind, doc_type: docType }) });
   if (!r.ok) return flash("Could not create the Word file.");
   const blob = await r.blob();
   const cd = r.headers.get("Content-Disposition") || "";
@@ -317,21 +319,21 @@ screens.home = () => {
   const p = META.profile || {};
   app.innerHTML = `
     <h1>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}. What would you like to do?</h1>
-    <p class="lead">Choose one of the boxes below. ${esc(p.brand || p.name || "")}</p>
+    <p class="lead">Choose one of the boxes below.</p>
     ${META.ai_ready ? "" : `<div class="banner warn"><strong>The AI part is not switched on yet.</strong> The Filing Calendar, 'Something happened?' and Licences screens work now. To ask questions, check and write documents, ask IT to add the access key (see README).</div>`}
     <div id="due-banner"></div>
     <div class="tiles">
-      <button class="tile" onclick="go('ask')"><span class="num">1</span><span class="t">Ask a question</span>
+      <button class="tile" onclick="go('ask')"><span class="num">01</span><span class="t">Ask a question</span>
         <div class="d">Company law, FEMA, hospital licences, contracts, notices - in plain English, with sections quoted.</div></button>
-      <button class="tile" onclick="go('vet')"><span class="num">2</span><span class="t">Check a document</span>
+      <button class="tile" onclick="go('vet')"><span class="num">02</span><span class="t">Check a document</span>
         <div class="d">Upload an NDA, agreement, legal notice or Board paper. Get a clear verdict, the risks and the changes to ask for.</div></button>
-      <button class="tile" onclick="go('draft')"><span class="num">3</span><span class="t">Write a document</span>
+      <button class="tile" onclick="go('draft')"><span class="num">03</span><span class="t">Write a document</span>
         <div class="d">Board notice, minutes, resolutions, NDA, doctor agreement, reply to legal notice and more - ready in Word.</div></button>
-      <button class="tile" onclick="go('calendar')"><span class="num">4</span><span class="t">Filing calendar</span>
+      <button class="tile" onclick="go('calendar')"><span class="num">04</span><span class="t">Filing calendar</span>
         <div class="d">What is due and overdue: MCA forms, AGM, FEMA, PCPNDT, BMW, tax. Tick them off when filed.</div></button>
-      <button class="tile" onclick="go('events')"><span class="num">5</span><span class="t">Something happened?</span>
+      <button class="tile" onclick="go('events')"><span class="num">05</span><span class="t">Something happened?</span>
         <div class="d">New director, loan taken, shares issued, legal notice received, data leak... get the checklist of what to do.</div></button>
-      <button class="tile" onclick="go('licences')"><span class="num">6</span><span class="t">Licences &amp; renewals</span>
+      <button class="tile" onclick="go('licences')"><span class="num">06</span><span class="t">Licences &amp; renewals</span>
         <div class="d">Keep expiry dates of hospital licences (AERB, PCPNDT, fire, pollution, drugs...) and see what needs renewing.</div></button>
     </div>
     <div class="tiles" style="margin-top:1rem">
@@ -365,7 +367,7 @@ screens.ask = () => {
     <div class="step no-print" id="ask-box">
       <div class="q">Your question</div>
       <textarea id="q" placeholder="For example: What is the last date for filing AOC-4 if our AGM is on 26 September?"></textarea>
-      <details style="margin-top:0.5rem"><summary style="cursor:pointer;color:var(--blue-dark);font-weight:600">Attach a document to the question (optional)</summary><div id="ask-up" style="margin-top:0.6rem"></div></details>
+      <details style="margin-top:0.5rem"><summary style="cursor:pointer;color:var(--navy);font-weight:600">Attach a document to the question (optional)</summary><div id="ask-up" style="margin-top:0.6rem"></div></details>
       <div class="btn-row"><button class="btn big" id="ask-btn">Ask</button>
         <button class="btn light" id="new-btn">Start a new question</button></div>
       <div class="group-title">Or click an example:</div>
@@ -459,10 +461,10 @@ screens.draft = () => {
     <div class="step"><div class="label">Step 1</div><div class="q">Which document do you need?</div>
       ${Object.entries(groups).map(([g, list]) => `<div class="group-title">${esc(g)}</div>${choiceList("dtype", list, chosen)}`).join("")}</div>
     <div class="step"><div class="label">Step 2</div><div class="q">Tell the assistant the details</div>
-      <p style="color:var(--gray);font-size:0.9rem;margin:0">Fill in what you know. Anything left empty will be shown as a blank [LIKE THIS] in the draft.</p>
+      <p style="color:var(--slate);font-size:0.9rem;margin:0">Fill in what you know. Anything left empty will be shown as a blank [LIKE THIS] in the draft.</p>
       <div id="qs"></div></div>
     <div class="step"><div class="label">Step 3 (optional)</div><div class="q">Add a reference document</div>
-      <p style="color:var(--gray);font-size:0.9rem;margin-top:0">For example the other side's draft, last year's version, or your rough notes.</p>
+      <p style="color:var(--slate);font-size:0.9rem;margin-top:0">For example the other side's draft, last year's version, or your rough notes.</p>
       <div id="draft-up"></div></div>
     <div class="btn-row"><button class="btn big" id="draft-btn">Write the document</button></div>
     <div id="convo"></div>`;
@@ -513,7 +515,7 @@ screens.calendar = async () => {
         ${r.penalty ? `<p><strong>If late:</strong> ${esc(r.penalty)}</p>` : ""}
         ${r.tip ? `<p><strong>Tip:</strong> ${esc(r.tip)}</p>` : ""}
         ${r.verify ? `<div class="banner warn"><strong>Please check:</strong> ${esc(r.verify)}</div>` : ""}
-        ${r.agm_based ? `<p style="color:var(--gray)">This date is worked out from the AGM date shown at the top of this screen.</p>` : ""}
+        ${r.agm_based ? `<p style="color:var(--slate)">This date is worked out from the AGM date shown at the top of this screen.</p>` : ""}
       </details>
       ${r.done_on ? `<div class="meta" style="grid-column:1/-1">Done on ${fmtDate(r.done_on)}${r.srn ? ` &middot; SRN / Ref: ${esc(r.srn)}` : ""}${r.notes ? ` &middot; ${esc(r.notes)}` : ""}</div>` : ""}
       <div class="actions no-print">
@@ -526,7 +528,7 @@ screens.calendar = async () => {
   all.forEach(r => { const k = r.due.slice(0, 7); (byMonth[k] = byMonth[k] || []).push(r); });
   app.innerHTML = `${backButton()}
     <h1>Filing calendar</h1>
-    <p class="lead">Today is ${fmtDate(c.today)}. Red = overdue, orange = due within 15 days, blue = within 45 days.
+    <p class="lead">Today is ${fmtDate(c.today)}. <span class="pill overdue">Overdue</span> <span class="pill soon">Due within 15 days</span> <span class="pill upcoming">Due within 45 days</span><br>
       Dates before ${fmtDate(c.tracking_since)} (when tracking started) are shown in grey - you can change this in Company details.</p>
     <h2>Needs attention now</h2>
     <div class="cards">${c.coming.length ? c.coming.map(card).join("") : `<div class="banner info">Nothing is overdue or due in the next 45 days. Well done.</div>`}</div>
@@ -536,13 +538,13 @@ screens.calendar = async () => {
       <div><button class="btn light" id="agm-save">Save AGM date</button></div>
       <div><button class="btn light" id="prev">&larr; Previous year</button> <button class="btn light" id="next">Next year &rarr;</button></div>
     </div>
-    ${c.agm_is_default ? `<p style="color:var(--amber);font-size:0.9rem;margin-bottom:0">AGM date not set - assumed to be 30 September. AOC-4, MGT-7, ADT-1 and CSR-2 dates are worked out from it.</p>` : ""}
+    ${c.agm_is_default ? `<p style="color:var(--magenta);font-size:0.9rem;margin-bottom:0">AGM date not set - assumed to be 30 September. AOC-4, MGT-7, ADT-1 and CSR-2 dates are worked out from it.</p>` : ""}
     </div>
     <div class="filters no-print"><button data-f="all" class="${calFilter === "all" ? "on" : ""}">Everything</button>
       ${Object.entries(cats).map(([k, v]) => `<button data-f="${k}" class="${calFilter === k ? "on" : ""}">${esc(v)}</button>`).join("")}</div>
     <div class="btn-row no-print"><button class="btn light" onclick="window.print()">Print this calendar</button></div>
     ${Object.entries(byMonth).map(([m, list]) => `<div class="month">${new Date(m + "-01T00:00:00").toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</div><div class="cards">${list.map(card).join("")}</div>`).join("")}
-    <p style="color:var(--gray);font-size:0.85rem;margin-top:1.5rem">Event-based filings (like DIR-12, MGT-14, CHG-1, PAS-3) are under <a href="#events">Something happened?</a>. Which items appear depends on the switches in <a href="#settings">Company details</a>.</p>`;
+    <p style="color:var(--slate);font-size:0.85rem;margin-top:1.5rem">Event-based filings (like DIR-12, MGT-14, CHG-1, PAS-3) are under <a href="#events">Something happened?</a>. Which items appear depends on the switches in <a href="#settings">Company details</a>.</p>`;
   const find = k => c.all.concat(c.coming).find(r => r.key === k);
   app.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { calFilter = b.dataset.f; screens.calendar(); });
   document.getElementById("prev").onclick = () => { calFy--; screens.calendar(); };
@@ -694,7 +696,7 @@ screens.settings = () => {
       <div class="choices">${Object.entries(META.flags).map(([k, l]) => `<label class="choice"><input type="checkbox" id="fl-${k}" ${f[k] ? "checked" : ""}><span>${esc(l)}</span></label>`).join("")}</div></div>
     <div class="step"><label class="field" for="p-since" style="margin-top:0">Start tracking filings from</label>
       <input type="date" id="p-since" value="${esc(META.tracking_since || "")}" style="max-width:260px">
-      <p style="color:var(--gray);font-size:0.9rem">Due dates before this date are not shown as overdue in the calendar.</p></div>
+      <p style="color:var(--slate);font-size:0.9rem">Due dates before this date are not shown as overdue in the calendar.</p></div>
     <div class="btn-row"><button class="btn big" id="p-save">Save</button></div>`;
   document.getElementById("p-save").onclick = async () => {
     const body = { flags: {}, tracking_since: document.getElementById("p-since").value };
@@ -729,7 +731,7 @@ function route() {
 }
 function setCompany() {
   const p = META.profile || {};
-  document.getElementById("company-name").textContent = (p.brand || p.name || "Company Secretary & Legal desk");
+  document.getElementById("company-name").textContent = `${p.brand || "VPS Lakeshore"} · Company Secretariat & Legal`;
 }
 window.addEventListener("hashchange", route);
 (async function start() {

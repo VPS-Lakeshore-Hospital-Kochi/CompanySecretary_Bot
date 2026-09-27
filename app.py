@@ -141,7 +141,14 @@ def _filename(title: str) -> str:
 def export_docx():
     body = request.get_json(force=True)
     title = body.get("title") or "Document"
-    data = export.markdown_to_docx(body.get("markdown", ""), title, store.get_profile().get("name", ""))
+    kind = body.get("kind") or "draft"
+    doc_type = body.get("doc_type")
+    group = ref = None
+    if kind == "draft" and doc_type in documents.DRAFT_BY_ID:
+        group = documents.DRAFT_BY_ID[doc_type]["group"]
+        ref = export.reference_for(*documents.REF_CODES.get(doc_type, ("LEG", "GEN")))
+    data = export.markdown_to_docx(body.get("markdown", ""), title, store.get_profile().get("name", ""),
+                                   kind=kind, group=group, ref=ref)
     from io import BytesIO
     return send_file(BytesIO(data), as_attachment=True, download_name=_filename(title),
                      mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")

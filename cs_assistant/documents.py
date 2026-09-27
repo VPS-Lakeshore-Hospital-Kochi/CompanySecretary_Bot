@@ -299,6 +299,17 @@ DRAFT_TYPES: list[dict] = [
 
 DRAFT_BY_ID = {d["id"]: d for d in DRAFT_TYPES}
 
+# Reference numbers follow the house convention LHRC/<DEPT>/<TYPE>/<YYYY>/<NNN>.
+REF_CODES = {
+    "board_notice": ("CS", "BM"), "board_resolution": ("CS", "RES"), "circular_resolution": ("CS", "RES"),
+    "minutes": ("CS", "MIN"), "agm_notice": ("CS", "AGM"), "board_report": ("CS", "BR"), "roc_reply": ("CS", "NOT"),
+    "nda": ("LEG", "NDA"), "consultant_doctor": ("LEG", "CON"), "service_agreement": ("LEG", "SVC"),
+    "equipment": ("LEG", "SVC"), "lease": ("LEG", "LSE"), "mou_college": ("LEG", "MOU"), "cta": ("LEG", "CTA"),
+    "dpa": ("LEG", "DPA"), "empanelment": ("LEG", "EMP"), "reply_legal_notice": ("LEG", "NOT"),
+    "legal_notice": ("LEG", "NOT"), "consumer_reply": ("LEG", "LIT"), "poa": ("LEG", "POA"),
+    "policy": ("CS", "POL"), "privacy_notice": ("LEG", "DPDP"), "other": ("LEG", "GEN"),
+}
+
 VET_TYPES: list[dict] = [
     {"id": "nda", "title": "NDA / Confidentiality Agreement",
      "focus": "one-sided definitions, missing exclusions, excessive term, residuals clause, broad non-solicit "

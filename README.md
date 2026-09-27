@@ -9,11 +9,13 @@ It is made for people who do not want to learn new software: big text, six big b
 | **1. Ask a question** | Company law, FEMA, hospital licensing, contracts, disputes. Answers quote the section and form, check official sites (MCA, RBI, India Code...) when needed, and remember the conversation for follow-ups. |
 | **2. Check a document** | Upload an NDA, agreement, legal notice, regulator's notice or Board paper (PDF, Word or a scanned picture). You get a **GREEN / AMBER / RED** verdict, a table of problems, ready-to-paste replacement clauses, stamp duty and approval points, and questions for the other side. Then ask for changes ("redraft clause 9 in our favour"). |
 | **3. Write a document** | 23 ready document types: Board notice & agenda, minutes from rough notes, resolutions and CTCs, AGM notice, NDA, consultant doctor agreement, vendor / equipment / lease agreements, MoUs, clinical trial agreements, DPA, legal notice and replies, consumer case written version, policies, privacy notice. Download in **Word**. |
-| **4. Filing calendar** | Every recurring filing worked out for the financial year: MCA forms, AGM-linked dates, FEMA, PCPNDT, Bio-Medical Waste, POSH (and optionally tax/GST/labour). Red / orange / blue by urgency; **Mark as done** with the SRN. |
+| **4. Filing calendar** | Every recurring filing worked out for the financial year: MCA forms, AGM-linked dates, FEMA, PCPNDT, Bio-Medical Waste, POSH (and optionally tax/GST/labour). Colour-coded by urgency; **Mark as done** with the SRN. |
 | **5. Something happened?** | Checklists for events such as a new director, a loan or charge, a share allotment (with FC-GPR), a related party contract, a legal notice, a consumer case, a data leak or new radiology equipment. |
 | **6. Licences & renewals** | Hospital licence register (AERB, PCPNDT, THOTA, drugs, BMW, fire, lifts, NABH, empanelments...). Warns 90 and 30 days before expiry. |
 
 Also: **My saved work** and **Company details** (name, CIN, which rules apply).
+
+**Look and feel.** The screens and every Word file use the VPS Lakeshore 2.0 brand ("In good hands"). That means DM Sans, navy `#001E5F` with a single magenta accent, cream panels and the official logo. Word files are built on the house document grammar: the kicker, a reference pill (`LHRC/LEG/NDA/2026/[NNN]`), a navy title rule, navy-header tables and magenta clause numbers, with "Template for guidance · Have Legal review before execution" in the footer. DM Sans is embedded in each file, so documents look right on PCs that do not have the font installed.
 
 The areas of work this tool covers, and why, are set out in [docs/CS_RESPONSIBILITIES.md](docs/CS_RESPONSIBILITIES.md).
 
@@ -84,5 +86,6 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
 ```
 
 - `app.py` is the Flask server and JSON / streaming API.
-- `static/` holds the front end: plain HTML, CSS and JS, with no build step and no internet libraries.
+- `static/` holds the front end: plain HTML, CSS and JS, with no build step and no internet libraries. The brand logo is in `static/brand/` and DM Sans (SIL Open Font Licence) is in `static/fonts/`.
+- `cs_assistant/export.py` builds the Word files in the Lakeshore template. The tokens at the top of that file match the brand book.
 - `cs_assistant/llm.py` makes the Claude calls. They are streamed, use adaptive thinking and prompt caching (the system prompt and uploaded documents), and run web search restricted to official domains.
