@@ -1,4 +1,4 @@
-"""Small SQLite database: settings, filings marked done, licences and saved work."""
+"""Small SQLite database: settings, filings marked done, licences, users and the activity log."""
 
 from __future__ import annotations
 
@@ -27,9 +27,13 @@ CREATE TABLE IF NOT EXISTS licences (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, authority TEXT, number TEXT,
     expiry TEXT, owner TEXT, notes TEXT, updated TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS work (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, title TEXT NOT NULL,
-    markdown TEXT NOT NULL, created TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    full_name TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
+    active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, last_login TEXT
+);
+CREATE TABLE IF NOT EXISTS audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, username TEXT, action TEXT NOT NULL, detail TEXT
 );
 """
 
@@ -54,6 +58,9 @@ def _now() -> str:
 def init() -> None:
     with db() as c:
         c.executescript(SCHEMA)
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(filings)")}
+        if "done_by" not in cols:
+            c.execute("ALTER TABLE filings ADD COLUMN done_by TEXT")
         if not c.execute("SELECT 1 FROM settings WHERE key='profile'").fetchone():
             with open(PROFILE_SEED, encoding="utf-8") as f:
                 c.execute("INSERT INTO settings VALUES ('profile', ?)", (f.read(),))
@@ -90,11 +97,12 @@ def filings_done() -> dict[str, dict]:
     return {r["key"]: dict(r) for r in rows}
 
 
-def mark_filing(key: str, item_id: str, due: str, done_on: str | None, srn: str = "", notes: str = "") -> None:
+def mark_filing(key: str, item_id: str, due: str, done_on: str | None, srn: str = "", notes: str = "",
+                user: str = "") -> None:
     with db() as c:
         c.execute(
-            "INSERT OR REPLACE INTO filings (key, item_id, due, done_on, srn, notes, updated) VALUES (?,?,?,?,?,?,?)",
-            (key, item_id, due, done_on, srn, notes, _now()),
+            "INSERT OR REPLACE INTO filings (key, item_id, due, done_on, srn, notes, updated, done_by) VALUES (?,?,?,?,?,?,?,?)",
+            (key, item_id, due, done_on, srn, notes, _now(), user or None),
         )
 
 
@@ -128,26 +136,74 @@ def delete_licence(lic_id: int) -> None:
         c.execute("DELETE FROM licences WHERE id=?", (lic_id,))
 
 
-# ---------------------------------------------------------------- saved work
-def save_work(kind: str, title: str, markdown: str) -> int:
+# --------------------------------------------------------------------- users
+USER_FIELDS = "id, username, full_name, role, active, created, last_login"
+
+
+def user_count() -> int:
     with db() as c:
-        cur = c.execute("INSERT INTO work (kind, title, markdown, created) VALUES (?,?,?,?)",
-                        (kind, title[:200], markdown, _now()))
+        return int(c.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+
+
+def list_users() -> list[dict]:
+    with db() as c:
+        return [dict(r) for r in c.execute(f"SELECT {USER_FIELDS} FROM users ORDER BY full_name")]
+
+
+def get_user(user_id: int) -> dict | None:
+    with db() as c:
+        r = c.execute(f"SELECT {USER_FIELDS} FROM users WHERE id=?", (user_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def user_with_hash(username: str) -> dict | None:
+    with db() as c:
+        r = c.execute("SELECT * FROM users WHERE username=?", (username.strip(),)).fetchone()
+    return dict(r) if r else None
+
+
+def create_user(username: str, full_name: str, password_hash: str, role: str = "member") -> int:
+    with db() as c:
+        try:
+            cur = c.execute("INSERT INTO users (username, full_name, password_hash, role, created) VALUES (?,?,?,?,?)",
+                            (username.strip(), full_name.strip(), password_hash, role, _now()))
+        except sqlite3.IntegrityError as e:
+            raise ValueError("That username is already taken.") from e
         return int(cur.lastrowid)
 
 
-def list_work(limit: int = 50) -> list[dict]:
+def update_user(user_id: int, **fields) -> None:
+    allowed = {k: v for k, v in fields.items() if k in ("full_name", "role", "active", "password_hash", "last_login")}
+    if not allowed:
+        return
     with db() as c:
-        rows = c.execute("SELECT id, kind, title, created FROM work ORDER BY id DESC LIMIT ?", (limit,))
-        return [dict(r) for r in rows]
+        c.execute(f"UPDATE users SET {', '.join(f'{k}=?' for k in allowed)} WHERE id=?", (*allowed.values(), user_id))
 
 
-def get_work(work_id: int) -> dict | None:
+def active_admins() -> int:
     with db() as c:
-        row = c.execute("SELECT * FROM work WHERE id=?", (work_id,)).fetchone()
-    return dict(row) if row else None
+        return int(c.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1").fetchone()[0])
 
 
-def delete_work(work_id: int) -> None:
+# ---------------------------------------------------------------- activity log
+def log(username: str, action: str, detail: str = "") -> None:
     with db() as c:
-        c.execute("DELETE FROM work WHERE id=?", (work_id,))
+        c.execute("INSERT INTO audit (at, username, action, detail) VALUES (?,?,?,?)", (_now(), username, action, detail[:500]))
+
+
+def recent_activity(limit: int = 200) -> list[dict]:
+    with db() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM audit ORDER BY id DESC LIMIT ?", (limit,))]
+
+
+# ------------------------------------------------------------------- backup
+def backup_database(dest_path: str) -> None:
+    """Consistent copy of the live database (safe while the site is in use)."""
+    with _lock:
+        src = sqlite3.connect(DB_PATH)
+        dst = sqlite3.connect(dest_path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()

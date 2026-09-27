@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from datetime import date
 
 import anthropic
 
-from . import files
+from . import files, library
 from .knowledge import SYSTEM_PROMPT, profile_block
 
 MODEL = os.environ.get("CS_MODEL", "claude-opus-5")
@@ -29,6 +30,46 @@ OFFICIAL_DOMAINS = [
     "cdsco.gov.in", "aerb.gov.in", "meity.gov.in", "cert-in.org.in", "nmc.org.in", "icsi.edu",
     "icai.org", "kerala.gov.in", "keralapcb.nic.in", "sci.gov.in", "ncdrc.nic.in", "mohfw.gov.in",
     "nabh.co", "pib.gov.in", "dpiit.gov.in", "cpcb.nic.in", "icmr.gov.in", "legislative.gov.in",
+]
+
+# Tools that let the assistant look things up in the office's own document library.
+LIBRARY_TOOLS = [
+    {
+        "name": "search_library",
+        "description": (
+            "Search the company's internal document library (MOA/AOA, Board and general meeting minutes and "
+            "resolutions, statutory registers, filed MCA forms, policies, executed contracts, licences, FEMA "
+            "filings, litigation papers, templates and precedents, legal opinions). Use it whenever the answer "
+            "depends on the company's own documents or past decisions, or to find a precedent to follow. "
+            "Returns up to 8 matches with a short extract; then read the ones you need."
+        ),
+        "eager_input_streaming": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Key words, e.g. 'quorum board meeting articles'"},
+                "folder": {"type": "string", "enum": [c[0] for c in library.CATEGORIES],
+                           "description": "Optional folder to limit the search to."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "read_library_document",
+        "description": (
+            "Read the text of one document from the internal library (current version). Long documents come "
+            "in parts: call again with 'start' set to the returned 'next_start' to continue."
+        ),
+        "eager_input_streaming": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc_id": {"type": "integer", "description": "The document number from search_library."},
+                "start": {"type": "integer", "description": "Character position to start from (default 0)."},
+            },
+            "required": ["doc_id"],
+        },
+    },
 ]
 
 _client: anthropic.Anthropic | None = None
@@ -93,33 +134,62 @@ def stream_reply(mode: str, messages: list[dict], profile: dict) -> Iterator[dic
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": EFFORT.get(mode, "high")},
     }
+    tools: list[dict] = []
+    if library.total():
+        tools.extend(LIBRARY_TOOLS)
     if mode == "ask" and WEB_SEARCH:
-        params["tools"] = [{
+        tools.append({
             "type": "web_search_20260209", "name": "web_search", "max_uses": 5,
             "allowed_domains": OFFICIAL_DOMAINS,
             "user_location": {"type": "approximate", "country": "IN", "region": "Kerala", "city": "Kochi"},
-        }]
+        })
+    if tools:
+        params["tools"] = tools
     if USE_FALLBACKS:
         params["betas"] = ["server-side-fallback-2026-07-01"]
         params["fallbacks"] = "default"
 
     convo = list(messages)
     sources: dict[str, str] = {}
+    json_retries = 0
     yield {"type": "status", "text": "Reading and thinking - this can take a minute for long documents..."}
     try:
-        for _ in range(4):  # a server-side web search may pause the turn; resume it
-            with client().beta.messages.stream(messages=convo, **params) as stream:
-                for event in stream:
-                    if event.type == "content_block_start":
-                        block = event.content_block
-                        if block.type == "server_tool_use":
-                            yield {"type": "status", "text": "Checking official sources (MCA, RBI, India Code...)"}
-                    elif event.type == "content_block_delta" and event.delta.type == "text_delta":
-                        yield {"type": "text", "text": event.delta.text}
-                final = stream.get_final_message()
+        step = 0
+        while step < 16:  # web search can pause a turn, library look-ups need a few rounds
+            step += 1
+            try:
+                with client().beta.messages.stream(messages=convo, **params) as stream:
+                    for event in stream:
+                        if event.type == "content_block_start":
+                            block = event.content_block
+                            if block.type == "server_tool_use":
+                                yield {"type": "status", "text": "Checking official sources (MCA, RBI, India Code...)"}
+                            elif block.type == "tool_use":
+                                yield {"type": "status", "text": "Looking in the document library..."}
+                        elif event.type == "content_block_delta" and event.delta.type == "text_delta":
+                            yield {"type": "text", "text": event.delta.text}
+                    final = stream.get_final_message()
+            except ValueError:
+                # A library look-up arrived as unreadable JSON; ask again (a few times at most).
+                json_retries += 1
+                if json_retries > 2:
+                    raise
+                continue
             _collect_sources(final, sources)
             if final.stop_reason == "pause_turn":
                 convo.append({"role": "assistant", "content": final.content})
+                continue
+            if final.stop_reason == "tool_use":
+                convo.append({"role": "assistant", "content": final.content})
+                results = []
+                for block in final.content:
+                    if block.type != "tool_use":
+                        continue
+                    result, label = run_library_tool(block.name, block.input, sources)
+                    if label:
+                        yield {"type": "status", "text": label}
+                    results.append({"type": "tool_result", "tool_use_id": block.id, **result})
+                convo.append({"role": "user", "content": results})
                 continue
             if final.stop_reason == "refusal":
                 yield {"type": "notice", "text": "The assistant could not complete this request. "
@@ -128,6 +198,9 @@ def stream_reply(mode: str, messages: list[dict], profile: dict) -> Iterator[dic
                 yield {"type": "notice", "text": "The answer was cut short because it was very long. "
                                                   "Type 'please continue' below to get the rest."}
             break
+    except ValueError:
+        yield {"type": "error", "text": "The assistant had trouble searching the library. Please try again."}
+        return
     except anthropic.AuthenticationError:
         yield {"type": "error", "text": "The AI service rejected the access key. Ask IT to check ANTHROPIC_API_KEY."}
         return
@@ -154,6 +227,35 @@ def stream_reply(mode: str, messages: list[dict], profile: dict) -> Iterator[dic
     if sources:
         yield {"type": "sources", "items": [{"url": u, "title": t} for u, t in sources.items()]}
     yield {"type": "done"}
+
+
+def run_library_tool(name: str, raw_input, sources: dict[str, str]) -> tuple[dict, str]:
+    """Run one library tool call. Returns (tool_result fields, status text for the screen)."""
+    inp = raw_input if isinstance(raw_input, dict) else {}
+    if name == "search_library":
+        query = inp.get("query")
+        folder = inp.get("folder") or ""
+        if not isinstance(query, str) or not query.strip() or not isinstance(folder, str):
+            return {"is_error": True, "content": json.dumps({"INVALID_INPUT": raw_input})}, ""
+        hits = library.search(query, category=folder if folder in library.CATEGORY_NAMES else "", limit=8)
+        out = [{"doc_id": h["id"], "title": h["title"], "folder": h["category_name"], "date": h["doc_date"],
+                "version": h["current_version"], "extract": (h.get("snippet") or "").replace("«", "").replace("»", "")}
+               for h in hits]
+        return {"content": json.dumps({"results": out} if out else {"results": [], "note": "No matching documents."})}, \
+            f"Searched the library for '{query.strip()[:60]}'"
+    if name == "read_library_document":
+        doc_id, start = inp.get("doc_id"), inp.get("start", 0)
+        if not isinstance(doc_id, int) or not isinstance(start, int):
+            return {"is_error": True, "content": json.dumps({"INVALID_INPUT": raw_input})}, ""
+        doc = library.read_text(doc_id, start)
+        if not doc:
+            return {"is_error": True, "content": "No such document in the library."}, ""
+        if doc["text_status"] in ("scanned", "picture") and not doc["text"]:
+            doc["note"] = ("This is a scanned copy or picture with no readable text. Tell the user to open it "
+                           "from the library and use 'Ask about this document' so it can be read directly.")
+        sources.setdefault(f"#doc/{doc_id}", f"Library: {doc['title']}")
+        return {"content": json.dumps(doc)}, f"Reading '{doc['title'][:60]}' from the library"
+    return {"is_error": True, "content": f"Unknown tool {name}"}, ""
 
 
 def _collect_sources(message, sources: dict[str, str]) -> None:

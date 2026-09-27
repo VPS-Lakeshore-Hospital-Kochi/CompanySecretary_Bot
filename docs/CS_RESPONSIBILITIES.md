@@ -2,7 +2,7 @@
 
 This is the map the CS Assistant was built from. It covers the work of the Company Secretary (CS) and the in-house legal team of a large private multi-speciality hospital company in Kerala with foreign shareholding (as at September 2026). For each area it notes which part of the tool helps.
 
-**Screens:** Ask = Ask a question · Check = Check a document · Write = Write a document · Calendar = Filing calendar · Events = Something happened? · Licences = Licences & renewals
+**Screens:** Ask = Ask a question · Check = Check a document · Write = Write a document · Calendar = Filing calendar · Events = Something happened? · Licences = Licences & renewals · Library = Document library (every record listed below can be kept there, in its own folder, and the assistant can read it)
 
 ---
 

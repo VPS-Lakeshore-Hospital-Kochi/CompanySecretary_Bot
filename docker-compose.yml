@@ -1,0 +1,14 @@
+# Start with:   docker compose up -d
+# Site:         http://<server>:8080  (put it behind HTTPS - see deploy/nginx.conf)
+services:
+  cs-assistant:
+    build: .
+    image: cs-assistant:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      CS_DATA_DIR: /data
+    ports:
+      - "127.0.0.1:8080:8080"   # only reachable through the reverse proxy on the same server
+    volumes:
+      - ./data:/data            # database + library files: BACK THIS FOLDER UP EVERY NIGHT
