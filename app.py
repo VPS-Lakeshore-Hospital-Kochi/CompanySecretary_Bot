@@ -22,6 +22,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from cs_assistant import calendar as cal
 from cs_assistant import documents, export, files, library, llm, store
+from cs_assistant.knowledge import OFFICIAL_LINKS
 
 
 def _load_dotenv() -> None:
@@ -290,42 +291,6 @@ def meta():
         "library_folders": [{"id": c[0], "name": c[1], "hint": c[2]} for c in library.CATEGORIES],
         "links": OFFICIAL_LINKS,
     })
-
-
-OFFICIAL_LINKS = [
-    ("Company law", [
-        ("MCA - Acts, Rules, e-forms and filing", "https://www.mca.gov.in"),
-        ("ICSI - Secretarial Standards SS-1 and SS-2", "https://www.icsi.edu"),
-        ("India Code - every central Act, as amended", "https://www.indiacode.nic.in"),
-        ("e-Gazette of India - notifications", "https://egazette.gov.in"),
-        ("SEBI (if securities are listed)", "https://www.sebi.gov.in"),
-    ]),
-    ("Foreign investment", [
-        ("RBI - FEMA Master Directions and circulars", "https://www.rbi.org.in"),
-        ("RBI FIRMS portal - FC-GPR and FC-TRS", "https://firms.rbi.org.in"),
-        ("RBI FLAIR portal - annual FLA return", "https://flair.rbi.org.in"),
-    ]),
-    ("Hospital regulators", [
-        ("AERB eLORA - radiation licences", "https://elora.aerb.gov.in"),
-        ("CDSCO - drugs, blood centres, clinical trials", "https://cdsco.gov.in"),
-        ("National Medical Commission", "https://www.nmc.org.in"),
-        ("NABH - accreditation standards", "https://nabh.co"),
-        ("Kerala State Pollution Control Board", "https://keralapcb.nic.in"),
-        ("Central Pollution Control Board - BMW Rules", "https://cpcb.nic.in"),
-        ("Ministry of Health and Family Welfare", "https://mohfw.gov.in"),
-        ("Government of Kerala", "https://kerala.gov.in"),
-    ]),
-    ("Data, tax, labour and courts", [
-        ("MeitY - DPDP Act and Rules", "https://www.meity.gov.in"),
-        ("CERT-In - report a cyber incident", "https://www.cert-in.org.in"),
-        ("Income Tax e-filing", "https://www.incometax.gov.in"),
-        ("GST portal", "https://www.gst.gov.in"),
-        ("Ministry of Labour - Labour Codes", "https://labour.gov.in"),
-        ("e-Daakhil - consumer complaints", "https://edaakhil.nic.in"),
-        ("NCDRC - National Consumer Commission", "https://ncdrc.nic.in"),
-        ("Supreme Court of India", "https://www.sci.gov.in"),
-    ]),
-]
 
 
 @app.get("/api/guide")
