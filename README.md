@@ -25,6 +25,18 @@ The areas of work this tool covers, and why, are set out in [docs/CS_RESPONSIBIL
 
 ---
 
+## Two ways to run it
+
+- **On claude.ai, as a private artifact (no server).** Built from `artifact/` with `python artifact/build.py`, then published as a claude.ai artifact. Access is managed with the artifact's Share menu:
+  - **Editors** add library files and change company details.
+  - **Contributors** ask, check and draft; they also mark filings and update licences.
+  - **Viewers** read.
+
+  The assistant runs on each viewer's own Claude account, and the page's own storage holds the records and library files. It cannot look things up on the web, and it reads long documents in parts.
+- **On your own server** (the rest of this README). This version adds web look-ups of official sites, individual logins and a backup file.
+
+Both versions share the same legal knowledge, calendar, checklists and document types (`cs_assistant/`), so improve those once and rebuild.
+
 ## Setting it up (for IT)
 
 ### Option A - an internal site for the team (recommended)
