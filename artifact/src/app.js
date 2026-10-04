@@ -171,6 +171,7 @@ function md(text) {
 /* ============================================================ capabilities */
 const cap = { db: null, assets: null, sample: null, user: null, downloads: null, limits: null, uid: null,
   canEdit: false, canWrite: null, canUpload: false, ready: false };
+const REG_KINDS = ["committees", "directors", "transplant", "decisions", "requests"];
 const S = { profile: null, agm: {}, filings: {}, licences: [], lib: [], reg: {}, loaded: { profile: false, lib: false, licences: false, reg: false } };
 const names = {};
 
@@ -216,11 +217,11 @@ function subscribe() {
   db.collection("filings").onSnapshot((q) => { S.filings = {}; q.docs.forEach((d) => { S.filings[d.id] = d.data(); }); rerender("calendar"); }, onErr);
   db.collection("licences").onSnapshot((q) => { S.licences = q.docs.map((d) => ({ id: d.id, ...d.data() })); S.loaded.licences = true; rerender("licences"); }, onErr);
   let regSeen = 0;
-  for (const kind of ["committees", "transplant", "decisions", "requests"]) {
+  for (const kind of REG_KINDS) {
     let first = true;
     db.collection("reg_" + kind).onSnapshot((q) => {
       S.reg[kind] = q.docs.map((d) => ({ id: d.id, ...d.data() }));
-      if (first) { first = false; regSeen++; S.loaded.reg = regSeen === 4; }
+      if (first) { first = false; regSeen++; S.loaded.reg = regSeen === REG_KINDS.length; }
       rerender("reg");
     }, onErr);
   }
@@ -991,7 +992,7 @@ screens.home = () => {
       <button type="button" class="tile" data-go="events"><span class="t">Something happened?</span><span class="d">New director, loan, share allotment, legal notice, data leak: the checklist of what to do.</span></button>
       <button type="button" class="tile" data-go="licences"><span class="t">Licences &amp; renewals</span><span class="d">Expiry dates of hospital licences (AERB, PCPNDT, fire, pollution, drugs) and what needs renewing.</span></button>
       <button type="button" class="tile" data-go="share"><span class="t">Can we share this?</span><span class="d">A shareholder, the police, a court, an insurer or a patient's family wants our records. What the law allows, the requests register, and how long to keep records.</span></button>
-      <button type="button" class="tile" data-go="committees"><span class="t">Committees &amp; decisions</span><span class="d">Board and hospital committees, Transplant Authorisation Committee files, and Board decisions to follow up for the Action Taken Report.</span></button>
+      <button type="button" class="tile" data-go="committees"><span class="t">Committees &amp; decisions</span><span class="d">Board and hospital committees, directors' disclosures and KYC, Transplant Authorisation Committee files, and Board decisions to follow up.</span></button>
     </div>
     <div class="tiles small" style="margin-top:1rem">
       <button type="button" class="tile" data-go="guides"><span class="t">Guides &amp; official links</span><span class="d">What the CS office looks after, and the MCA, RBI and regulator portals.</span></button>
@@ -1293,7 +1294,6 @@ screens.licences = () => {
 screens.licences.live = ["licences"];
 
 /* ------------------------------------------------- registers (shared logic in static/registers.js) */
-const REG_KINDS = ["committees", "transplant", "decisions", "requests"];
 const regCtx = () => ({ spec: DATA.registers, checklist: DATA.transplantChecklist });
 const regRows = (kind) => S.reg[kind] || [];
 
@@ -1301,7 +1301,8 @@ function regCard(kind, r, st) {
   return `<div class="card ${st[0]}"><div><div class="title">${esc(regTitle(kind, r))}</div>
       <div class="meta">${regMeta(kind, r, regCtx())}</div>
       ${kind === "decisions" && r.decision ? `<div class="meta">${esc(r.decision)}</div>` : ""}
-      ${kind === "requests" && r.what ? `<div class="meta">${esc(r.what)}</div>` : ""}</div>
+      ${kind === "requests" && r.what ? `<div class="meta">${esc(r.what)}</div>` : ""}
+      ${kind === "directors" ? directorDues(r).items.filter((i) => i.st[0] !== "later").map((i) => `<div class="meta">&middot; ${esc(i.st[1])}</div>`).join("") : ""}</div>
     <div class="right"><span class="status ${st[0]}">${esc(st[1])}</span></div>
     <div class="actions"><button type="button" class="btn light" data-redit="${esc(r.id)}">Open / update</button></div></div>`;
 }
@@ -1416,24 +1417,27 @@ screens.committees = () => {
     committees: "Board committees and the hospital's statutory committees. Enter the last meeting date to see when the next one is due, and the date each must be reconstituted or re-registered.",
     transplant: "Living-donor files for the Transplant Authorisation Committee. Choose who the donor is to get the document list, and tick each item as it is verified. Use the case number, not patient names.",
     decisions: "Decisions of the Board and its committees, who must act and by when. This list becomes the Action Taken Report (matters arising) for the next Board meeting.",
+    directors: "Each director and KMP with their annual disclosures (MBP-1, DIR-8, independence declaration), DIR-3 KYC, IICA databank and term dates. Enter the date each was last received or filed; the list shows what is due and by when.",
   }[comTab];
   const extra = {
     committees: `<button type="button" class="btn light" id="c-minutes">Write minutes from rough notes</button><button type="button" class="btn light" id="c-tor">Write a committee's terms of reference</button>`,
     transplant: `<button type="button" class="btn light" id="t-vet">Ask the assistant to check a file</button><button type="button" class="btn light" id="t-minutes">Write committee minutes and decision</button>`,
     decisions: `<button type="button" class="btn light" id="d-atr">Write the Action Taken Report</button>`,
+    directors: `<button type="button" class="btn light" id="dir-letter">Write the letter asking for this year's disclosures</button><button type="button" class="btn light" id="dir-event">New director or KMP joins: checklist</button>`,
   }[comTab];
   const empty = comTab === "committees"
     ? `<div class="banner info">No committees listed yet. <button type="button" class="linklike" id="c-seed">Add the usual committees</button> (Audit, NRC, CSR, Transplant Authorisation, Ethics, POSH and the NABH committees), then edit them.</div>`
     : `<div class="banner info">Nothing here yet.</div>`;
   app.innerHTML = `${back()}<h1>Committees &amp; decisions</h1>
-    ${chipTabs([["committees", "Committees"], ["transplant", "Transplant files"], ["decisions", "Board decisions to follow up"]], comTab)}
+    ${chipTabs([["committees", "Committees"], ["directors", "Directors & KMP"], ["transplant", "Transplant files"], ["decisions", "Board decisions to follow up"]], comTab)}
     <p class="lead">${esc(intro)}</p>${readOnlyNote()}
     ${comTab === "transplant" ? `<div class="banner warn">${esc(DATA.transplantVerify)}</div>` : ""}
+    ${comTab === "directors" ? `<div class="banner warn">${esc(DATA.directorsVerify)}</div>` : ""}
     ${attention ? `<div class="banner warn"><strong>${attention} need${attention > 1 ? "" : "s"} attention now.</strong></div>` : ""}
     <div class="row"><button type="button" class="btn" id="c-add">+ Add a ${esc(ctx.spec[comTab].singular)}</button>${extra}</div>
     <div class="cards">${S.loaded.reg ? (list.map((x) => regCard(comTab, x.r, x.st)).join("") || empty) : `<p class="meta">Loading...</p>`}</div>`;
   $$("[data-tab]").forEach((b) => { b.onclick = () => { comTab = b.dataset.tab; render(); }; });
-  const presets = { decisions: { status: "Open" }, transplant: { received_on: todayIso(), decision: "Pending", organ: "Kidney" } }[comTab] || {};
+  const presets = { decisions: { status: "Open" }, transplant: { received_on: todayIso(), decision: "Pending", organ: "Kidney" }, directors: { kyc_cycle: "3" } }[comTab] || {};
   $("#c-add").onclick = () => regEdit(comTab, {}, presets);
   wireRegCards(comTab);
   const on = (id, fn) => { const el = $("#" + id); if (el) el.onclick = fn; };
@@ -1450,6 +1454,12 @@ screens.committees = () => {
   on("c-tor", () => { pending.draftType = "committee_constitution"; go("draft"); });
   on("t-vet", () => { pending.vetType = "transplant_file"; go("vet"); });
   on("t-minutes", () => { pending.draftType = "tac_minutes"; go("draft"); });
+  on("dir-letter", () => {
+    pending.draftType = "director_disclosures";
+    pending.draftAnswers = { directors: disclosureText(rows) };
+    go("draft");
+  });
+  on("dir-event", () => go("event-director_appointed"));
   on("d-atr", () => {
     const open = rows.filter((r) => r.status !== "Dropped");
     if (!open.length) return flash("Add the decisions first, then press this button.");
@@ -1723,7 +1733,7 @@ The calendar shows what is due for our financial year. When a filing is done pre
 When someone asks for our records, choose the record and who is asking. You get a first answer (yes, yes with conditions, get approval first, or no), the law and what to check. **Log this request** keeps it in the Requests register; **Write the reply** drafts the letter. **How long to keep records** gives the retention periods.
 
 ### Committees & decisions
-Keep each committee's members and last meeting date to see when the next meeting or reconstitution is due. Track Transplant Authorisation Committee files with the document checklist for each kind of donor (use case numbers, not patient names). Enter Board decisions with an owner and due date; **Write the Action Taken Report** turns them into the "matters arising" paper.
+Keep each committee's members and last meeting date to see when the next meeting or reconstitution is due. Under **Directors & KMP**, enter when each director last gave MBP-1, DIR-8 and (for independent directors) the independence declaration, and when they last filed DIR-3 KYC; the list shows what is due, and **Write the letter asking for this year's disclosures** drafts the covering letter. Track Transplant Authorisation Committee files with the document checklist for each kind of donor (use case numbers, not patient names). Enter Board decisions with an owner and due date; **Write the Action Taken Report** turns them into the "matters arising" paper.
 
 ### Things to know
 - The assistant cannot look things up on the internet here. It says when a point should be checked on the official portal.

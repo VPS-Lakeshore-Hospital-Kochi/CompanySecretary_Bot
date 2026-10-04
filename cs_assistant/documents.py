@@ -106,6 +106,22 @@ DRAFT_TYPES: list[dict] = [
                     "Cite the source of each requirement (Companies Act, THOTA Rules 2014, NDCT Rules 2019, POSH Act, NABH).",
     },
     {
+        "id": "director_disclosures", "group": "Board & Shareholders",
+        "title": "Letter to directors: annual disclosures and KYC",
+        "questions": [
+            ("fy", "Financial year and the Board meeting the disclosures are for", "text"),
+            ("directors", "Directors and what is due from each", "textarea"),
+            ("by", "Date by which we need them back", "text"),
+        ],
+        "guidance": "Write a short covering letter from the Company Secretary to each director asking for the annual "
+                    "disclosures before the first Board meeting of the year: MBP-1 (Sec. 184(1), with the list of companies, "
+                    "firms and bodies the director is interested in), DIR-8 (Sec. 164(2)), and for independent directors the "
+                    "Sec. 149(7) declaration of independence and confirmation of their IICA databank registration (Rule 6 of "
+                    "the Appointment Rules). Remind them to complete DIR-3 KYC when due and to tell the company within 30 days "
+                    "of any change in their interests, mobile number, e-mail or address. List the enclosed formats. Then give "
+                    "a one-page checklist table the CS office can use to track returns.",
+    },
+    {
         "id": "roc_reply", "group": "Board & Shareholders",
         "title": "Letter to RoC / MCA / Regulator (reply to a notice)",
         "questions": [
@@ -374,7 +390,7 @@ REF_CODES = {
     "legal_notice": ("LEG", "NOT"), "consumer_reply": ("LEG", "LIT"), "poa": ("LEG", "POA"),
     "policy": ("CS", "POL"), "privacy_notice": ("LEG", "DPDP"), "other": ("LEG", "GEN"),
     "action_taken_report": ("CS", "ATR"), "committee_constitution": ("CS", "COM"), "records_reply": ("LEG", "REC"),
-    "tac_minutes": ("CS", "TAC"), "retention_policy": ("CS", "POL"),
+    "tac_minutes": ("CS", "TAC"), "director_disclosures": ("CS", "DIR"), "retention_policy": ("CS", "POL"),
 }
 
 VET_TYPES: list[dict] = [

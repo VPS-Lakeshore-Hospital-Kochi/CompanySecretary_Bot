@@ -68,6 +68,7 @@ def data() -> dict:
         "registers": registers.spec(),
         "transplantChecklist": [list(x) for x in registers.TRANSPLANT_CHECKLIST],
         "transplantVerify": registers.TRANSPLANT_VERIFY,
+        "directorsVerify": registers.DIRECTORS_VERIFY,
         "committeePresets": registers.COMMITTEE_PRESETS,
         "records": {
             "requesters": [list(x) for x in records.REQUESTERS],

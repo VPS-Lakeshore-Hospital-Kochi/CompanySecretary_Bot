@@ -86,7 +86,8 @@ ITEMS: list[Item] = [
         "Companies Act 2013, Sec. 184(1) and Sec. 164(2)", "board", "CS",
         ("dates", [(6, 30)]),
         form="MBP-1, DIR-8 (kept in records, not filed)",
-        tip="Also take fresh MBP-1 whenever a director's interests change. Update the Register of Contracts (MBP-4).",
+        tip="Also take fresh MBP-1 whenever a director's interests change. Update the Register of Contracts (MBP-4). "
+            "Track each director under Committees & decisions > Directors & KMP.",
     ),
     Item(
         "agm", "Annual General Meeting",
@@ -156,6 +157,7 @@ ITEMS: list[Item] = [
                "update within 30 days of any change in mobile, e-mail or address. Confirm the current rule "
                "and which directors are due this year on the MCA portal.",
         period_fmt="FY {fy}",
+        tip="See when each director last filed KYC under Committees & decisions > Directors & KMP.",
     ),
     Item(
         "cra2", "CRA-2 (appointment of Cost Auditor)",

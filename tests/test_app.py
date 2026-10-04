@@ -261,7 +261,7 @@ def test_bad_tool_input_is_returned_as_error(client):
 
 def test_registers_crud_and_committee_seed(client):
     m = client.get("/api/meta").get_json()
-    assert set(m["registers"]) == {"committees", "transplant", "decisions", "requests"}
+    assert set(m["registers"]) == {"committees", "transplant", "decisions", "requests", "directors"}
     assert m["records"]["matrix"]["medical"]["self"]["verdict"] == "yes"
 
     committees = client.get("/api/register/committees").get_json()
@@ -284,3 +284,14 @@ def test_registers_crud_and_committee_seed(client):
     assert not [x for x in client.get("/api/register/transplant").get_json() if x["id"] == tid]
     log = client.get("/api/activity").get_json()
     assert any("transplant" in (a["detail"] or "") for a in log)
+
+
+def test_directors_register(client):
+    m = client.get("/api/meta").get_json()
+    roles = dict(next(f for f in m["registers"]["directors"]["fields"] if f["key"] == "role")["options"])
+    assert roles["id"] == "Independent Director" and "directors_verify" in m
+    r = client.post("/api/register/directors", json={"name": "Test Director", "din": "01234567", "role": "id",
+                                                     "mbp1_on": "2026-05-02", "kyc_on": "2025-06-10", "kyc_cycle": "3"})
+    assert r.status_code == 200
+    row = next(x for x in client.get("/api/register/directors").get_json() if x["id"] == r.get_json()["id"])
+    assert row["din"] == "01234567" and row["kyc_cycle"] == "3"

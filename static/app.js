@@ -415,7 +415,7 @@ screens.home = () => {
       <button class="tile" onclick="go('share')"><span class="num">07</span><span class="t">Can we share this?</span>
         <div class="d">A shareholder, the police, a court, an insurer or a patient's family wants our records. See what the law allows, log the request, and check how long to keep records.</div></button>
       <button class="tile" onclick="go('committees')"><span class="num">08</span><span class="t">Committees &amp; decisions</span>
-        <div class="d">Board and hospital committees, Transplant Authorisation Committee files, and Board decisions to follow up for the Action Taken Report.</div></button>
+        <div class="d">Board and hospital committees, directors' disclosures and KYC, Transplant Authorisation Committee files, and Board decisions to follow up.</div></button>
     </div>
     <div class="tiles" style="margin-top:1rem">
       <button class="tile small" onclick="go('library')"><span class="t">Document library</span><div class="d">Minutes, registers, policies, contracts, licences, templates - in folders.</div></button>
@@ -765,7 +765,8 @@ function regCard(kind, r, st, extra = "") {
   return `<div class="card ${st[0]}"><div><div class="title">${esc(regTitle(kind, r))}</div>
       <div class="meta">${regMeta(kind, r, regCtx())}</div>
       ${kind === "decisions" && r.decision ? `<div class="meta">${esc(r.decision)}</div>` : ""}
-      ${kind === "requests" && r.what ? `<div class="meta">${esc(r.what)}</div>` : ""}</div>
+      ${kind === "requests" && r.what ? `<div class="meta">${esc(r.what)}</div>` : ""}
+      ${kind === "directors" ? directorDues(r).items.filter(i => i.st[0] !== "later").map(i => `<div class="meta">&middot; ${esc(i.st[1])}</div>`).join("") : ""}</div>
     <div class="due"><span class="pill ${st[0]}">${esc(st[1])}</span></div>
     <div class="actions no-print"><button class="btn light" data-redit="${r.id}">Open / update</button>${extra}</div></div>`;
 }
@@ -882,7 +883,7 @@ screens.share = async (param) => {
 let comTab = "committees";
 screens.committees = async (param) => {
   if (param) comTab = param;
-  const tabs = [["committees", "Committees"], ["transplant", "Transplant files"], ["decisions", "Board decisions to follow up"]];
+  const tabs = [["committees", "Committees"], ["directors", "Directors & KMP"], ["transplant", "Transplant files"], ["decisions", "Board decisions to follow up"]];
   app.innerHTML = `${backButton()}<h1>Committees &amp; decisions</h1><p class="lead">Loading...</p>`;
   const rows = await api(`/api/register/${comTab}`);
   const ctx = regCtx(), list = regSort(comTab, rows, ctx);
@@ -891,22 +892,25 @@ screens.committees = async (param) => {
     committees: "Board committees and the hospital's statutory committees. Enter the last meeting date to see when the next one is due, and the date each must be reconstituted or re-registered.",
     transplant: "Living-donor files for the Transplant Authorisation Committee. Choose who the donor is to get the document list, and tick each item as it is verified. Use the case number, not patient names.",
     decisions: "Decisions of the Board and its committees, who must act and by when. This list becomes the Action Taken Report (matters arising) for the next Board meeting.",
+    directors: "Each director and KMP with their annual disclosures (MBP-1, DIR-8, independence declaration), DIR-3 KYC, IICA databank and term dates. Enter the date each was last received or filed; the list shows what is due and by when.",
   }[comTab];
   const extraButtons = {
     committees: `<button class="btn light" id="c-minutes">Write minutes from rough notes</button><button class="btn light" id="c-tor">Write a committee's terms of reference</button>`,
     transplant: `<button class="btn light" id="t-vet">Ask the assistant to check a file</button><button class="btn light" id="t-minutes">Write committee minutes and decision</button>`,
     decisions: `<button class="btn light" id="d-atr">Write the Action Taken Report</button>`,
+    directors: `<button class="btn light" id="dir-letter">Write the letter asking for this year's disclosures</button><button class="btn light" id="dir-event">New director or KMP joins: checklist</button>`,
   }[comTab];
   app.innerHTML = `${backButton()}<h1>Committees &amp; decisions</h1>${tabsHtml(tabs, comTab)}
     <p class="lead">${esc(intro)}</p>
     ${comTab === "transplant" ? `<div class="banner warn">${esc(META.transplant_verify)}</div>` : ""}
+    ${comTab === "directors" ? `<div class="banner warn">${esc(META.directors_verify)}</div>` : ""}
     ${attention ? `<div class="banner warn"><strong>${attention} need${attention > 1 ? "" : "s"} attention now.</strong></div>` : ""}
     <div class="btn-row no-print"><button class="btn" id="c-add">+ Add a ${esc(ctx.spec[comTab].singular)}</button>${extraButtons}
       <button class="btn light" onclick="window.print()">Print</button></div>
     <div class="cards">${list.length ? list.map(x => regCard(comTab, x.r, x.st)).join("") : `<div class="banner info">Nothing here yet.</div>`}</div>`;
   app.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { comTab = b.dataset.tab; screens.committees(); });
   const reload = () => screens.committees();
-  const presets = { decisions: { status: "Open" }, transplant: { received_on: todayIso(), decision: "Pending", organ: "Kidney" } }[comTab] || {};
+  const presets = { decisions: { status: "Open" }, transplant: { received_on: todayIso(), decision: "Pending", organ: "Kidney" }, directors: { kyc_cycle: "3" } }[comTab] || {};
   document.getElementById("c-add").onclick = () => regEdit(comTab, {}, reload, presets);
   app.querySelectorAll("[data-redit]").forEach(b => b.onclick = () => regEdit(comTab, rows.find(r => String(r.id) === b.dataset.redit), reload));
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
@@ -914,6 +918,12 @@ screens.committees = async (param) => {
   on("c-tor", () => { pending.draftType = "committee_constitution"; go("draft"); });
   on("t-vet", () => { pending.vetType = "transplant_file"; go("vet"); });
   on("t-minutes", () => { pending.draftType = "tac_minutes"; go("draft"); });
+  on("dir-letter", () => {
+    pending.draftType = "director_disclosures";
+    pending.draftAnswers = { directors: disclosureText(rows) };
+    go("draft");
+  });
+  on("dir-event", () => { pending.event = "director_appointed"; go("events"); });
   on("d-atr", () => {
     const open = rows.filter(r => r.status !== "Dropped");
     if (!open.length) return flash("Add the decisions first, then press this button.");
@@ -1193,7 +1203,7 @@ screens.help = () => {
       <h3>Filing calendar</h3><p>Shows what is due, worked out for our financial year. When a filing is done, press <strong>Mark as done</strong> and note the SRN. Enter the AGM date so that AOC-4 and MGT-7 dates are right.</p>
       <h3>Licences</h3><p>Enter each licence's expiry date once; the tool warns 90 and 30 days ahead.</p>
       <h3>Can we share this?</h3><p>When someone asks for our records, choose the record and who is asking. You get a first answer (yes, yes with conditions, get approval first, or no), the law, and what to check. Press <strong>Log this request</strong> to keep it in the Requests register, or <strong>Write the reply</strong>. The <strong>How long to keep records</strong> tab gives the retention periods.</p>
-      <h3>Committees &amp; decisions</h3><p>Keep each committee's members and last meeting date to see when the next meeting or reconstitution is due. Track Transplant Authorisation Committee files with the document checklist for each kind of donor. Enter Board decisions with an owner and due date; <strong>Write the Action Taken Report</strong> turns them into the "matters arising" paper for the next Board meeting.</p>
+      <h3>Committees &amp; decisions</h3><p>Keep each committee's members and last meeting date to see when the next meeting or reconstitution is due. Under <strong>Directors &amp; KMP</strong>, enter when each director last gave MBP-1, DIR-8 and (for independent directors) the independence declaration, and when they last filed DIR-3 KYC; the list shows what is due, and <strong>Write the letter asking for this year's disclosures</strong> drafts the covering letter. Track Transplant Authorisation Committee files with the document checklist for each kind of donor. Enter Board decisions with an owner and due date; <strong>Write the Action Taken Report</strong> turns them into the "matters arising" paper for the next Board meeting.</p>
       <h3>Document library</h3><p>Home &rarr; <strong>Open the library</strong>, or type in the search box on the Home screen. Documents are kept in folders (Board meetings, registers, policies, contracts, licences and so on). Press <strong>+ Add documents</strong> to add files. Open any document to preview it, download it, upload a newer version (older versions are kept), or press <strong>Ask about this document</strong>, <strong>Check this document</strong> or <strong>Use it to write a new document</strong>. When you ask a question, the assistant also searches the library by itself and names the documents it used.</p>
       <h3>Saving your work</h3><p>After any answer, review or draft, press <strong>Save to library</strong>. It is saved as a Word file in the Lakeshore format, in the folder you choose.</p>
       <h3>Signing in</h3><p>Each person has their own username and password. Press <strong>Sign out</strong> at the top when you leave a shared computer. If you forget your password, ask the administrator to set a new one.</p>

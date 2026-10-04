@@ -17,7 +17,7 @@ This is the map the CS Assistant was built from. It covers the work of the Compa
 | Minutes: draft within 15 days, sign within 30 days, keep the minute books | Sec. 118, SS-1 | Write (turns rough notes into minutes) |
 | Committees: Audit, NRC, CSR, Stakeholders; their terms of reference and minutes | Sec. 177, 178, 135 | Committees, Write, Ask |
 | Matters arising: follow up each Board decision; Action Taken Report for the next meeting | SS-1 | Committees (Board decisions), Write |
-| Directors' disclosures: MBP-1, DIR-8, independence declarations | Sec. 184, 164, 149(7) | Calendar |
+| Directors' disclosures: MBP-1, DIR-8, independence declarations, IICA databank; DIR-3 KYC | Sec. 184, 164, 149(7); Rule 6 and 12A of the Appointment Rules | Committees (Directors & KMP), Calendar, Write |
 | AGM within 6 months of year end; notice 21 clear days before; explanatory statement | Sec. 96, 101, 102, SS-2 | Calendar, Write |
 | EGMs, postal ballots, e-voting where it applies | Sec. 100, 108, 110 | Write, Ask |
 | Board's report and its annexures (CSR, RPT AOC-2, secretarial audit MR-3, POSH numbers) | Sec. 134, Rule 8 Accounts Rules | Write |

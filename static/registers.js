@@ -85,7 +85,66 @@ function regStatus(kind, r, ctx) {
     }
     return ["soon", r.meeting_on ? `Ready for the meeting on ${fmtDate(r.meeting_on)}` : "File complete - fix the committee meeting"];
   }
+  if (kind === "directors") return directorDues(r).status;
   return ["later", ""];
+}
+
+/** Start of the current financial year (1 April) as YYYY-MM-DD, and its year. */
+function regFyStart() {
+  const t = new Date();
+  const y = t.getMonth() >= 3 ? t.getFullYear() : t.getFullYear() - 1;
+  return { y, iso: `${y}-04-01` };
+}
+
+/** What a director / KMP owes: a list of {what, due, st} and an overall status. */
+function directorDues(r) {
+  if (r.ceased_on) {
+    const dir12 = regAddDays(r.ceased_on, 30);
+    if (regDays(dir12) >= 0) {
+      const st = regDue(dir12, "DIR-12 due");
+      return { items: [{ what: "DIR-12 for the cessation", due: dir12, st }], status: st };
+    }
+    return { items: [], status: ["done", `Ceased on ${fmtDate(r.ceased_on)}`] };
+  }
+  const kmpOnly = ["cs", "cfo", "ceo"].includes(r.role);
+  const indep = r.role === "id";
+  const fy = regFyStart(), june30 = `${fy.y}-06-30`;
+  const items = [];
+  const annual = (field, what) => {
+    if (!r[field] || r[field] < fy.iso) items.push({ what, due: june30 });
+  };
+  if (!kmpOnly) {
+    annual("mbp1_on", "MBP-1 for this year");
+    annual("dir8_on", "DIR-8 for this year");
+  }
+  if (indep) {
+    annual("id_decl_on", "Sec. 149(7) independence declaration");
+    if (r.iica_until) items.push({ what: "IICA databank renewal", due: r.iica_until, soonDays: 60 });
+    else items.push({ what: "IICA databank validity - enter the date", due: null });
+  }
+  if (r.din) {
+    if (!r.kyc_on) items.push({ what: "DIR-3 KYC - enter the date last filed", due: null });
+    else {
+      const n = Number(r.kyc_cycle || 3);
+      items.push({ what: "DIR-3 KYC", due: `${Number(String(r.kyc_on).slice(0, 4)) + n}-06-30` });
+    }
+  }
+  if (r.term_ends) items.push({ what: "Term ends - reappointment decision", due: r.term_ends, soonDays: 90 });
+  if (r.role === "additional" && r.regularise_by) items.push({ what: "Regularise at the AGM", due: r.regularise_by });
+  for (const it of items) {
+    if (!it.due) { it.st = ["unknown", it.what]; continue; }
+    it.st = regDue(it.due, `${it.what} due`);
+    // Renewals that need a longer lead time show as "upcoming" earlier.
+    if (it.st[0] === "later" && it.soonDays && regDays(it.due) <= it.soonDays) it.st = ["upcoming", `${it.what} due on ${fmtDate(it.due)}`];
+  }
+  const pending = items.filter((i) => ["overdue", "today", "soon", "upcoming", "unknown"].includes(i.st[0]));
+  if (!pending.length) {
+    const kyc = items.find((i) => i.what === "DIR-3 KYC");
+    return { items, status: ["later", `Up to date${kyc ? ` · next KYC by ${fmtDate(kyc.due)}` : ""}`] };
+  }
+  const worst = pending.reduce((a, b) => (REG_RANK[a.st[0]] <= REG_RANK[b.st[0]] ? a : b));
+  const more = pending.length - 1;
+  return { items, status: [worst.st[0], worst.st[1] + (more ? ` (+${more} more)` : "")] };
 }
 
 /** One-line summary under the card title. */
@@ -96,13 +155,15 @@ function regMeta(kind, r, ctx) {
     committees: [r.kind, r.basis, r.last_meeting ? `last met ${fmtDate(r.last_meeting)}` : "", r.every_days ? `meets at least every ${r.every_days} days` : ""],
     decisions: [r.meeting, r.meeting_date ? fmtDate(r.meeting_date) : "", r.owner ? `Action: ${r.owner}` : "", r.filing],
     requests: [r.requester ? opt(f("requester"), r.requester) : "", r.record ? opt(f("record"), r.record) : "", r.received_on ? `received ${fmtDate(r.received_on)}` : ""],
+    directors: [r.role ? opt(f("role"), r.role) : "", r.din ? `DIN ${r.din}` : "", r.appointed_on ? `appointed ${fmtDate(r.appointed_on)}` : "",
+      r.mbp1_on ? `MBP-1 ${fmtDate(r.mbp1_on)}` : "", r.kyc_on ? `KYC ${fmtDate(r.kyc_on)}` : ""],
     transplant: [r.organ, r.relation ? opt(f("relation"), r.relation).replace(/ \(.*\)$/, "") : "", r.received_on ? `received ${fmtDate(r.received_on)}` : "", r.coordinator ? `coordinator ${r.coordinator}` : ""],
   }[kind] || [];
   return bits.filter(Boolean).map((b) => esc(b)).join(" &middot; ");
 }
 
 function regTitle(kind, r) {
-  return { committees: r.name, decisions: r.item, requests: r.requester_name, transplant: `File ${r.case_ref}` }[kind] || "";
+  return { directors: r.name, committees: r.name, decisions: r.item, requests: r.requester_name, transplant: `File ${r.case_ref}` }[kind] || "";
 }
 
 /** Sort rows: most urgent first. */
@@ -166,6 +227,14 @@ function regReadForm(kind, root, ctx) {
 function atrText(rows) {
   const keep = rows.filter((r) => r.status !== "Dropped");
   return keep.map((r, n) => `${n + 1}. ${r.meeting || "Meeting"}${r.meeting_date ? " (" + fmtDate(r.meeting_date) + ")" : ""} - ${r.item}: ${r.decision || ""} | Responsibility: ${r.owner || "-"} | Due: ${r.due ? fmtDate(r.due) : "-"} | Status: ${r.status || "Open"} | Action taken: ${r.action || "-"}`).join("\n");
+}
+
+/** Text for the directors' disclosure letter, from the directors register. */
+function disclosureText(rows) {
+  return rows.filter((r) => !r.ceased_on).map((r) => {
+    const due = directorDues(r).items.filter((i) => i.st && i.st[0] !== "later").map((i) => i.what.replace(/ - enter.*$/, ""));
+    return `${r.name}${r.din ? " (DIN " + r.din + ")" : ""}: ${due.length ? due.join(", ") : "nothing due"}`;
+  }).join("\n");
 }
 
 /* ------------------------------------------------------------- can we share this? */

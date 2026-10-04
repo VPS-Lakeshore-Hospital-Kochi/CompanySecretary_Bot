@@ -7,6 +7,8 @@
     decisions   - Board / committee decisions and who must act on them. This is the
                   "matters arising" and Action Taken Report for the next Board pack.
     requests    - requests for records and what was decided (see records.py).
+    directors   - directors and KMP: the annual disclosures (MBP-1, DIR-8, independence
+                  declarations), DIR-3 KYC, IICA databank, terms and regularisation.
 
 Each register is a list of rows. The fields are described here once, and both the
 self-hosted site and the claude.ai artifact draw their forms from this description.
@@ -76,7 +78,52 @@ REGISTERS: dict[str, dict] = {
             {"key": "notes", "label": "Notes (what was given, acknowledgement)", "kind": "textarea"},
         ],
     },
+    "directors": {
+        "title": "Directors and KMP", "singular": "director or KMP", "required": "name",
+        "fields": [
+            {"key": "name", "label": "Name", "kind": "text"},
+            {"key": "din", "label": "DIN (leave blank for KMP without a DIN)", "kind": "text"},
+            {"key": "role", "label": "Position", "kind": "select", "options_from": "DIRECTOR_ROLES"},
+            {"key": "appointed_on", "label": "Date of appointment", "kind": "date"},
+            {"key": "term_ends", "label": "Current term ends on (independent directors, MD / whole-time directors)", "kind": "date"},
+            {"key": "regularise_by", "label": "Additional director: to be regularised at the AGM on", "kind": "date"},
+            {"key": "mbp1_on", "label": "Last MBP-1 (disclosure of interest) received on", "kind": "date"},
+            {"key": "dir8_on", "label": "Last DIR-8 (not disqualified) received on", "kind": "date"},
+            {"key": "id_decl_on", "label": "Independent directors: last Sec. 149(7) declaration received on", "kind": "date"},
+            {"key": "iica_until", "label": "Independent directors: IICA databank registration valid until", "kind": "date"},
+            {"key": "kyc_on", "label": "Last DIR-3 KYC filed on", "kind": "date"},
+            {"key": "kyc_cycle", "label": "KYC cycle", "kind": "select", "options_from": "KYC_CYCLES"},
+            {"key": "ceased_on", "label": "Ceased to hold office on (leave blank while serving)", "kind": "date"},
+            {"key": "notes", "label": "Notes (other directorships, interested entities, changes to report)", "kind": "textarea"},
+        ],
+    },
 }
+
+DIRECTOR_ROLES: list[tuple[str, str]] = [
+    ("md", "Managing Director"),
+    ("wtd", "Whole-time Director"),
+    ("ned", "Non-executive Director"),
+    ("id", "Independent Director"),
+    ("nominee", "Nominee Director"),
+    ("additional", "Additional Director"),
+    ("cs", "Company Secretary (KMP)"),
+    ("cfo", "Chief Financial Officer (KMP)"),
+    ("ceo", "Chief Executive Officer (KMP)"),
+]
+KMP_ONLY = {"cs", "cfo", "ceo"}
+
+# DIR-3 KYC: Rule 12A was amended in 2025 to a once-in-three-years KYC (see the calendar's verify note).
+KYC_CYCLES: list[tuple[str, str]] = [
+    ("3", "Every 3 years (2025 amendment to Rule 12A - confirm on the MCA portal)"),
+    ("1", "Every year"),
+]
+
+DIRECTORS_VERIFY = (
+    "MBP-1, DIR-8 and the independence declaration are taken at the first Board meeting of each financial year "
+    "(this register treats them as due by 30 June) and again whenever something changes. DIR-3 KYC moved to a "
+    "three-year cycle under the 2025 amendment to Rule 12A, with an update within 30 days of any change in mobile, "
+    "e-mail or address. Confirm the current rule on the MCA portal. A missed KYC deactivates the DIN."
+)
 
 # ---------------------------------------------------------------------------
 # Committees a hospital company of this kind usually has.  The CS edits the list.
@@ -190,6 +237,8 @@ def spec() -> dict:
         "DONOR_RELATIONS": [list(x) for x in DONOR_RELATIONS],
         "REQUESTERS": [list(x) for x in records.REQUESTERS],
         "RECORDS": [[r["id"], r["title"]] for r in records.RECORDS],
+        "DIRECTOR_ROLES": [list(x) for x in DIRECTOR_ROLES],
+        "KYC_CYCLES": [list(x) for x in KYC_CYCLES],
     }
     for kind, reg in REGISTERS.items():
         fields = []
