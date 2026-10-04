@@ -2,7 +2,7 @@
 
 An internal website for the **Company Secretary and Legal team** of a hospital company in India (built for VPS Lakeshore / Lakeshore Hospital & Research Centre Ltd, Kochi).
 
-It is made for people who do not want to learn new software: big text, six big buttons, plain English, and a **Back to Home** button on every screen. Each person signs in with their own username. The site keeps the office's documents in a searchable **Document library** that everyone can refer to and work from.
+It is made for people who do not want to learn new software: big text, eight big buttons, plain English, and a **Back to Home** button on every screen. Each person signs in with their own username. The site keeps the office's documents in a searchable **Document library** that everyone can refer to and work from.
 
 | Button | What it does |
 |---|---|
@@ -12,6 +12,8 @@ It is made for people who do not want to learn new software: big text, six big b
 | **4. Filing calendar** | Every recurring filing worked out for the financial year: MCA forms, AGM-linked dates, FEMA, PCPNDT, Bio-Medical Waste, POSH (and optionally tax/GST/labour). Colour-coded by urgency; **Mark as done** with the SRN. |
 | **5. Something happened?** | Checklists for events such as a new director, a loan or charge, a share allotment (with FC-GPR), a related party contract, a legal notice, a consumer case, a data leak or new radiology equipment. |
 | **6. Licences & renewals** | Hospital licence register (AERB, PCPNDT, THOTA, drugs, BMW, fire, lifts, NABH, empanelments...). Warns 90 and 30 days before expiry. |
+| **7. Can we share this?** | Someone wants our records: a shareholder, a director, the police, a court, an insurer, a patient's family, the group parent, a buyer's lawyers. Choose the record and the requester to get a first answer (**yes / yes with conditions / get approval first / no**), with the conditions and the law (Companies Act Sec. 94, 119, 128, 171; BNSS Sec. 94; IMC Regulations 72-hour rule; DPDP Act; HIV, MTP, POCSO, MHCA and POSH confidentiality). Then **log the request** in the Requests register, ask the assistant to confirm, or draft the reply. A **How long to keep records** tab gives the retention schedule and the steps before destroying anything. |
+| **8. Committees & decisions** | **Committees:** Board committees and the hospital's statutory committees (Audit, NRC, CSR, Executive, Transplant Authorisation, Ethics, POSH IC, NABH committees), pre-loaded, with members, last meeting, when the next is due and when reconstitution or re-registration is due. **Transplant files:** each living-donor file for the Authorisation Committee, with the document checklist for the kind of donor (near relative, spouse, unrelated, swap, foreign national) and the steps after the decision. **Board decisions:** who must act on what, by when. One click writes the **Action Taken Report** for the next Board meeting. |
 
 | **Document library** | The CS office's documents in folders: constitution (MOA/AOA), Board and general meetings, statutory registers, MCA filings, director records, policies and delegation of powers, contracts, licences, FEMA, litigation, templates and precedents, laws and opinions. It offers:<br>• search across titles and the words inside PDFs and Word files<br>• preview in the browser, and download<br>• new versions uploaded on top of old ones (older versions are kept)<br>• one-click **Ask about this document**, **Check this document** or **Use it to write a new document**<br>• **Save to library** after any answer or draft, which stores a Lakeshore-format Word file |
 
@@ -111,6 +113,8 @@ The legal content was prepared as at September 2026. It reflects the BNS/BNSS/BS
 - The fixed calendar data is in `cs_assistant/calendar.py`. Each item has its section, due-date rule and a "please check" note. Edit it there if a date changes.
 - The assistant's standing instructions and legal background are in `cs_assistant/knowledge.py`.
 - The document types and their questions are in `cs_assistant/documents.py`.
+- Who may see which records, and the retention schedule, are in `cs_assistant/records.py`.
+- The committees, transplant file checklist and other registers are in `cs_assistant/registers.py`. The screen logic shared by both versions is in `static/registers.js`.
 
 ## For developers
 

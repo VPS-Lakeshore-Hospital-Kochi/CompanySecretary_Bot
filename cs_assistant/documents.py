@@ -82,6 +82,30 @@ DRAFT_TYPES: list[dict] = [
         "guidance": "Draft the section to meet Sec. 134(3) and the Companies (Accounts) Rules 2014, Rule 8.",
     },
     {
+        "id": "action_taken_report", "group": "Board & Shareholders",
+        "title": "Action Taken Report (matters arising) for the Board",
+        "questions": [
+            ("meeting", "For which meeting (number and date)", "text"),
+            ("items", "Decisions of earlier meetings and what has been done on each", "textarea"),
+        ],
+        "guidance": "Prepare the agenda note 'Review of matters arising from previous Board meetings' as a table: "
+                    "meeting and date, item, decision taken, responsibility, status (completed / in progress / pending), "
+                    "action taken and expected date. Lead with a short summary of how many items are closed, in progress and overdue. "
+                    "End with a draft resolution or a line that the Board noted the report.",
+    },
+    {
+        "id": "committee_constitution", "group": "Board & Shareholders",
+        "title": "Constitution / Terms of Reference of a committee",
+        "questions": [
+            ("committee", "Which committee (Board committee, Transplant Authorisation Committee, Ethics Committee, POSH IC...)", "text"),
+            ("members", "Proposed chair and members", "textarea"),
+        ],
+        "guidance": "Draft the Board resolution or office order constituting the committee, and its terms of reference: "
+                    "the law it is formed under, composition and eligibility rules (independence, women members, external members), "
+                    "quorum, frequency of meetings, powers, reporting to the Board, tenure and conflict-of-interest rules. "
+                    "Cite the source of each requirement (Companies Act, THOTA Rules 2014, NDCT Rules 2019, POSH Act, NABH).",
+    },
+    {
         "id": "roc_reply", "group": "Board & Shareholders",
         "title": "Letter to RoC / MCA / Regulator (reply to a notice)",
         "questions": [
@@ -256,6 +280,21 @@ DRAFT_TYPES: list[dict] = [
                     "30 days (+15 max) of notice.",
     },
     {
+        "id": "records_reply", "group": "Legal Letters & Disputes",
+        "title": "Reply to a request for records / inspection / summons",
+        "questions": [
+            ("requester", "Who asked, and how (letter, email, summons, police requisition) with its date and reference", "text"),
+            ("asked", "What they asked for", "textarea"),
+            ("decision", "What we will do (share, share in part, ask for consent / proper authority, decline)", "textarea"),
+        ],
+        "guidance": "Write a short, polite reply on the company's behalf. Cite the law that gives or limits the right "
+                    "(Companies Act Sec. 94, 119, 128, 136, 171; BNSS Sec. 94; IMC Regulations 2002 Reg. 1.3.2; DPDP Act 2023; "
+                    "special laws such as the HIV and AIDS Act, MTP Act Sec. 5A, POCSO Sec. 23 and the POSH Act Sec. 16). "
+                    "If sharing, list the documents enclosed as certified copies and ask for an acknowledgement. If not sharing, "
+                    "say what is needed (written consent, a requisition under the proper section, a court order). "
+                    "Never admit liability. Add a covering line marking the enclosures confidential.",
+    },
+    {
         "id": "poa", "group": "Legal Letters & Disputes",
         "title": "Power of Attorney / Letter of Authority",
         "questions": [
@@ -266,6 +305,32 @@ DRAFT_TYPES: list[dict] = [
                     "revocation, and stamp duty under the Kerala Stamp Act.",
     },
     # ------------------------------------------------------------ Policies
+    {
+        "id": "tac_minutes", "group": "Hospital Committees",
+        "title": "Transplant Authorisation Committee: minutes and decision",
+        "questions": [
+            ("meeting", "Meeting date, time, place; members present and quorum", "textarea"),
+            ("cases", "Files considered: case number, organ, donor relation, documents seen, interview notes (no patient names unless needed)", "textarea"),
+            ("decisions", "Decision on each file, with reasons", "textarea"),
+        ],
+        "guidance": "Draft the minutes of a hospital-based Authorisation Committee under THOTA 1994 and the THOTA Rules 2014: "
+                    "attendance and quorum, a declaration that no member is part of the transplant team, for each file the documents "
+                    "verified, the separate interviews of donor and recipient, the committee's findings on relationship, voluntariness "
+                    "and the absence of commercial dealing, and the decision with reasons. Then the decision notice to be displayed on the "
+                    "notice board, and the letter to the applicants (with the right of appeal if approval is refused). Do not invent form numbers: "
+                    "write '[prescribed form under THOTA Rules 2014]' where a form must be named, and add a note to confirm it.",
+    },
+    {
+        "id": "retention_policy", "group": "Policies",
+        "title": "Preservation of Documents / Records Retention policy",
+        "questions": [
+            ("scope", "What it should cover (company records, medical records, HR, IT logs, contracts...)", "textarea"),
+        ],
+        "guidance": "Draft a Board-approved policy: purpose, scope, a retention schedule table (record, period, legal basis, custodian), "
+                    "storage and security, litigation hold, the process for approving and recording destruction, and electronic records. "
+                    "Use the statutory minimums (Companies Act Sec. 118, 128(5) and the Management and Administration Rules; IMC Regulations 2002; "
+                    "PCPNDT Sec. 29; NDCT Rules 2019; CERT-In Directions 2022; DPDP Act 2023) and mark any period you are not sure of for checking.",
+    },
     {
         "id": "policy", "group": "Policies",
         "title": "Company Policy (RPT, CSR, Vigil mechanism, POSH, Code of Conduct...)",
@@ -308,6 +373,8 @@ REF_CODES = {
     "dpa": ("LEG", "DPA"), "empanelment": ("LEG", "EMP"), "reply_legal_notice": ("LEG", "NOT"),
     "legal_notice": ("LEG", "NOT"), "consumer_reply": ("LEG", "LIT"), "poa": ("LEG", "POA"),
     "policy": ("CS", "POL"), "privacy_notice": ("LEG", "DPDP"), "other": ("LEG", "GEN"),
+    "action_taken_report": ("CS", "ATR"), "committee_constitution": ("CS", "COM"), "records_reply": ("LEG", "REC"),
+    "tac_minutes": ("CS", "TAC"), "retention_policy": ("CS", "POL"),
 }
 
 VET_TYPES: list[dict] = [
@@ -341,6 +408,20 @@ VET_TYPES: list[dict] = [
     {"id": "govt_notice", "title": "Notice from RoC / MCA / RBI / Regulator",
      "focus": "what is alleged, the section invoked, the deadline, whether there is a real default, "
               "penalty exposure, compounding / adjudication options, and a draft reply outline."},
+    {"id": "transplant_file", "title": "Transplant Authorisation Committee file (living donor)",
+     "focus": "whether the file is complete for the kind of donor (near relative, spouse, unrelated, swap, foreign national) under "
+              "THOTA 1994 and the THOTA Rules 2014: joint application, identity and age proof, proof of relationship (or DNA test), "
+              "medical fitness and psychological evaluation of the donor, recipient's need certificate, HLA reports, counselling and "
+              "informed consent, affidavits of no payment, and for unrelated donors the evidence of affection, financial status and "
+              "verification reports; embassy certificate for foreign nationals. Flag any sign of commercial dealing, inconsistencies "
+              "between documents (names, ages, addresses, signatures), missing signatures or attestation, and anything the committee "
+              "should ask in the interview. Give the verdict as: ready for the committee / ready after listed gaps are filled / not ready. "
+              "Do not invent form numbers; say 'confirm the prescribed form' where needed."},
+    {"id": "records_request", "title": "Request for records, summons or police requisition",
+     "focus": "who is asking and under what power (Companies Act Sec. 94, 119, 128, 206, 207; BNSS Sec. 94 or 179; a consumer or "
+              "court summons); whether the requisition is valid (signed, officer named, case number, time and place); which records "
+              "we may give and on what conditions (patient consent, IMC Regulations 2002 Reg. 1.3.2, DPDP Act, special laws such as "
+              "the HIV and AIDS Act, MTP Act Sec. 5A, POCSO, MHCA Sec. 23, POSH Sec. 16); the deadline; and an outline reply."},
     {"id": "board_docs", "title": "Board / Shareholder papers (notice, minutes, resolutions)",
      "focus": "compliance with the Companies Act and SS-1 / SS-2: notice period, quorum, correct section, "
               "interested directors, wording of resolutions, filings triggered (MGT-14 etc.)."},

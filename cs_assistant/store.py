@@ -1,4 +1,4 @@
-"""Small SQLite database: settings, filings marked done, licences, users and the activity log."""
+"""Small SQLite database: settings, filings marked done, licences, registers, users and the activity log."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from .calendar import DEFAULT_LICENCES
+from .registers import COMMITTEE_PRESETS, REGISTERS
 
 DATA_DIR = os.environ.get("CS_DATA_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "data"))
 DB_PATH = os.path.join(DATA_DIR, "cs_assistant.db")
@@ -32,6 +33,11 @@ CREATE TABLE IF NOT EXISTS users (
     full_name TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
     active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, last_login TEXT
 );
+CREATE TABLE IF NOT EXISTS register_rows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, data TEXT NOT NULL,
+    updated TEXT NOT NULL, updated_by TEXT
+);
+CREATE INDEX IF NOT EXISTS register_rows_kind ON register_rows (kind);
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, username TEXT, action TEXT NOT NULL, detail TEXT
 );
@@ -72,6 +78,13 @@ def init() -> None:
                 "INSERT INTO licences (name, authority, updated) VALUES (?, ?, ?)",
                 [(n, a, _now()) for n, a in DEFAULT_LICENCES],
             )
+        if not c.execute("SELECT 1 FROM settings WHERE key='committees_seeded'").fetchone():
+            fields = [f["key"] for f in REGISTERS["committees"]["fields"]]
+            c.executemany(
+                "INSERT INTO register_rows (kind, data, updated) VALUES ('committees', ?, ?)",
+                [(json.dumps({k: p.get(k) for k in fields}), _now()) for p in COMMITTEE_PRESETS],
+            )
+            c.execute("INSERT INTO settings VALUES ('committees_seeded', 'true')")
 
 
 # ------------------------------------------------------------------ settings
@@ -134,6 +147,31 @@ def save_licence(data: dict) -> int:
 def delete_licence(lic_id: int) -> None:
     with db() as c:
         c.execute("DELETE FROM licences WHERE id=?", (lic_id,))
+
+
+# ----------------------------------------------------------------- registers
+def list_rows(kind: str) -> list[dict]:
+    with db() as c:
+        rows = c.execute("SELECT * FROM register_rows WHERE kind=? ORDER BY id", (kind,)).fetchall()
+    return [{**json.loads(r["data"]), "id": r["id"], "updated": r["updated"], "updated_by": r["updated_by"]} for r in rows]
+
+
+def save_row(kind: str, data: dict, row_id: int | None = None, user: str = "") -> int:
+    with db() as c:
+        if row_id:
+            cur = c.execute("UPDATE register_rows SET data=?, updated=?, updated_by=? WHERE id=? AND kind=?",
+                            (json.dumps(data), _now(), user or None, row_id, kind))
+            if not cur.rowcount:
+                raise ValueError("That entry no longer exists.")
+            return row_id
+        cur = c.execute("INSERT INTO register_rows (kind, data, updated, updated_by) VALUES (?,?,?,?)",
+                        (kind, json.dumps(data), _now(), user or None))
+        return int(cur.lastrowid)
+
+
+def delete_row(kind: str, row_id: int) -> None:
+    with db() as c:
+        c.execute("DELETE FROM register_rows WHERE id=? AND kind=?", (row_id, kind))
 
 
 # --------------------------------------------------------------------- users

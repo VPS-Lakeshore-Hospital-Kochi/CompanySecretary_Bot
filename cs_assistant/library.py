@@ -27,6 +27,7 @@ MAX_BYTES = 50 * 1024 * 1024
 CATEGORIES: list[tuple[str, str, str]] = [
     ("constitution", "Company constitution", "Certificate of incorporation, MOA, AOA, name-change and conversion certificates, share capital history."),
     ("board", "Board & committee meetings", "Notices, agenda papers, signed minutes, attendance registers, resolutions, circular resolutions."),
+    ("committees", "Hospital committees", "Transplant Authorisation Committee orders and minutes, Ethics Committee registration and minutes, POSH Internal Committee orders and annual reports."),
     ("general", "General meetings", "AGM / EGM notices, explanatory statements, minutes, scrutiniser reports, postal ballots."),
     ("registers", "Statutory registers", "Registers of members, directors & KMP, charges, contracts (MBP-4), loans & investments (MBP-2), SBO."),
     ("filings", "MCA filings & challans", "Filed e-forms with SRN and challans: AOC-4, MGT-7, DIR-12, MGT-14, CHG-1, PAS-3 and others."),

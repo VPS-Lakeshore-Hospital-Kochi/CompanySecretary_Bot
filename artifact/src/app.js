@@ -171,7 +171,7 @@ function md(text) {
 /* ============================================================ capabilities */
 const cap = { db: null, assets: null, sample: null, user: null, downloads: null, limits: null, uid: null,
   canEdit: false, canWrite: null, canUpload: false, ready: false };
-const S = { profile: null, agm: {}, filings: {}, licences: [], lib: [], loaded: { profile: false, lib: false, licences: false } };
+const S = { profile: null, agm: {}, filings: {}, licences: [], lib: [], reg: {}, loaded: { profile: false, lib: false, licences: false, reg: false } };
 const names = {};
 
 async function initCaps() {
@@ -215,6 +215,15 @@ function subscribe() {
   db.doc("calendar/agm").onSnapshot((d) => { S.agm = (d.exists && d.data().dates) || {}; rerender("calendar"); }, onErr);
   db.collection("filings").onSnapshot((q) => { S.filings = {}; q.docs.forEach((d) => { S.filings[d.id] = d.data(); }); rerender("calendar"); }, onErr);
   db.collection("licences").onSnapshot((q) => { S.licences = q.docs.map((d) => ({ id: d.id, ...d.data() })); S.loaded.licences = true; rerender("licences"); }, onErr);
+  let regSeen = 0;
+  for (const kind of ["committees", "transplant", "decisions", "requests"]) {
+    let first = true;
+    db.collection("reg_" + kind).onSnapshot((q) => {
+      S.reg[kind] = q.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (first) { first = false; regSeen++; S.loaded.reg = regSeen === 4; }
+      rerender("reg");
+    }, onErr);
+  }
   db.collection("lib").onSnapshot((q) => {
     S.lib = q.docs.map((d) => ({ id: d.id, ...d.data() }));
     S.loaded.lib = true;
@@ -981,6 +990,8 @@ screens.home = () => {
       <button type="button" class="tile" data-go="calendar"><span class="t">Filing calendar</span><span class="d">What is due and overdue: MCA forms, AGM, FEMA, PCPNDT, BMW. Tick them off when filed.</span></button>
       <button type="button" class="tile" data-go="events"><span class="t">Something happened?</span><span class="d">New director, loan, share allotment, legal notice, data leak: the checklist of what to do.</span></button>
       <button type="button" class="tile" data-go="licences"><span class="t">Licences &amp; renewals</span><span class="d">Expiry dates of hospital licences (AERB, PCPNDT, fire, pollution, drugs) and what needs renewing.</span></button>
+      <button type="button" class="tile" data-go="share"><span class="t">Can we share this?</span><span class="d">A shareholder, the police, a court, an insurer or a patient's family wants our records. What the law allows, the requests register, and how long to keep records.</span></button>
+      <button type="button" class="tile" data-go="committees"><span class="t">Committees &amp; decisions</span><span class="d">Board and hospital committees, Transplant Authorisation Committee files, and Board decisions to follow up for the Action Taken Report.</span></button>
     </div>
     <div class="tiles small" style="margin-top:1rem">
       <button type="button" class="tile" data-go="guides"><span class="t">Guides &amp; official links</span><span class="d">What the CS office looks after, and the MCA, RBI and regulator portals.</span></button>
@@ -1057,10 +1068,11 @@ screens.ask = () => {
 
 screens.vet = () => {
   const vt = DATA.vetTypes.map((v) => ({ id: v.id, title: v.title }));
+  const vetChosen = pending.vetType || "nda"; delete pending.vetType;
   app.innerHTML = `${back()}
     <h1>Check a document</h1>
     <p class="lead">Three steps. The assistant reads the whole document and tells you whether it is safe to sign.</p>
-    <div class="panel step"><div class="step-no">Step 1</div><div class="q">What kind of document is it?</div>${choiceList("vtype", vt, "nda")}</div>
+    <div class="panel step"><div class="step-no">Step 1</div><div class="q">What kind of document is it?</div>${choiceList("vtype", vt, vetChosen)}</div>
     <div class="panel step"><div class="step-no">Step 2</div><div class="q">Add the document</div><div id="vet-up"></div></div>
     <div class="panel step"><div class="step-no">Step 3</div><div class="q">A little background (optional)</div>
       <label class="field" for="vet-role">Which side are we on?</label>
@@ -1094,6 +1106,7 @@ screens.draft = () => {
   const groups = {};
   DATA.draftTypes.forEach((d) => (groups[d.group] = groups[d.group] || []).push(d));
   const chosen = pending.draftType || "nda"; delete pending.draftType;
+  let prefill = pending.draftAnswers || null; delete pending.draftAnswers;
   app.innerHTML = `${back()}
     <h1>Write a document</h1>
     <p class="lead">Pick the document, answer a few questions, and the assistant writes a complete first draft you can download in Word.</p>
@@ -1111,6 +1124,7 @@ screens.draft = () => {
     const d = DATA.draftTypes.find((x) => x.id === $("input[name=dtype]:checked").value);
     qs.innerHTML = [...d.questions, ...DATA.commonQuestions].map(([k, label, kind]) => `<label class="field" for="f-${k}">${esc(label)}</label>` +
       (kind === "textarea" ? `<textarea id="f-${k}" data-k="${k}"></textarea>` : `<input type="text" id="f-${k}" data-k="${k}">`)).join("");
+    if (prefill) { $$("[data-k]", qs).forEach((el) => { if (prefill[el.dataset.k]) el.value = prefill[el.dataset.k]; }); prefill = null; }
   };
   $$("input[name=dtype]").forEach((i) => i.addEventListener("change", drawQs));
   drawQs();
@@ -1222,7 +1236,7 @@ screens.event = (id) => {
     <p class="meta">These are the usual steps. Check the latest rules for your exact facts; the assistant can help.</p>`;
   $$(".checklist input").forEach((c) => { c.onchange = () => c.closest("li").classList.toggle("ticked", c.checked); });
   $("#ev-ask").onclick = () => { pending.question = `Something has happened: ${e.title}. Please give me a complete, dated action plan for our company - every approval, form, deadline, fee and register entry - and list the documents I will need to prepare.`; go("ask"); };
-  $("#ev-draft").onclick = () => { pending.draftType = { legal_notice: "reply_legal_notice", consumer_case: "consumer_reply", govt_notice: "roc_reply" }[e.id] || "board_resolution"; go("draft"); };
+  $("#ev-draft").onclick = () => { pending.draftType = { legal_notice: "reply_legal_notice", consumer_case: "consumer_reply", govt_notice: "roc_reply", board_meeting_held: "minutes", records_request: "records_reply", transplant_case: "tac_minutes" }[e.id] || "board_resolution"; go("draft"); };
 };
 
 /* --------------------------------------------------------------- licences */
@@ -1277,6 +1291,174 @@ screens.licences = () => {
   $$("[data-edit]").forEach((b) => { b.onclick = () => edit(S.licences.find((l) => l.id === b.dataset.edit)); });
 };
 screens.licences.live = ["licences"];
+
+/* ------------------------------------------------- registers (shared logic in static/registers.js) */
+const REG_KINDS = ["committees", "transplant", "decisions", "requests"];
+const regCtx = () => ({ spec: DATA.registers, checklist: DATA.transplantChecklist });
+const regRows = (kind) => S.reg[kind] || [];
+
+function regCard(kind, r, st) {
+  return `<div class="card ${st[0]}"><div><div class="title">${esc(regTitle(kind, r))}</div>
+      <div class="meta">${regMeta(kind, r, regCtx())}</div>
+      ${kind === "decisions" && r.decision ? `<div class="meta">${esc(r.decision)}</div>` : ""}
+      ${kind === "requests" && r.what ? `<div class="meta">${esc(r.what)}</div>` : ""}</div>
+    <div class="right"><span class="status ${st[0]}">${esc(st[1])}</span></div>
+    <div class="actions"><button type="button" class="btn light" data-redit="${esc(r.id)}">Open / update</button></div></div>`;
+}
+
+function regEdit(kind, r, preset = {}, after = null) {
+  const ctx = regCtx(), spec = ctx.spec[kind];
+  const row = r.id ? r : { ...preset };
+  openDialog(`<h2 style="margin-top:0">${r.id ? "Update" : "Add a"} ${esc(spec.singular)}</h2>
+    ${kind === "transplant" ? `<div class="banner warn">${esc(DATA.transplantVerify)}</div>` : ""}
+    ${regFormHtml(kind, row, ctx)}
+    <div class="row"><button type="button" class="btn" id="r-save">Save</button><button type="button" class="btn light" id="r-cancel">Cancel</button>
+    ${r.id ? `<button type="button" class="btn danger" id="r-del">Delete</button>` : ""}</div>`, true);
+  regWireForm(kind, dlg, ctx);
+  $("#r-cancel").onclick = closeDialog;
+  $("#r-save").onclick = async () => {
+    const { data, missing } = regReadForm(kind, dlg, ctx);
+    if (missing) return flash(`Please fill in: ${missing}.`);
+    if (await write(() => cap.db.doc(`reg_${kind}/` + (r.id || newId())).set({ ...data, by: cap.uid, at: new Date().toISOString() }))) {
+      closeDialog();
+      if (after) after(); else render();
+    }
+  };
+  if (r.id) $("#r-del").onclick = async () => {
+    if (await askConfirm(`Delete this ${spec.singular}?`, "Delete", true)) { if (await write(() => cap.db.doc(`reg_${kind}/` + r.id).delete())) render(); }
+  };
+}
+function wireRegCards(kind) {
+  $$("[data-redit]").forEach((b) => { b.onclick = () => regEdit(kind, regRows(kind).find((x) => x.id === b.dataset.redit)); });
+}
+const chipTabs = (tabs, on) => `<div class="chips">${tabs.map(([k, l]) => `<button type="button" class="chip ${k === on ? "on" : ""}" data-tab="${k}">${esc(l)}</button>`).join("")}</div>`;
+
+/* -------------------------------------------------------------- can we share this? */
+let shareTab = "decide";
+const shareSel = { record: "", requester: "" };
+screens.share = () => {
+  const R = DATA.records;
+  const head = `${back()}<h1>Records: share or keep?</h1>
+    <p class="lead">Someone wants our records. Can we give them, and on what terms? How long must we keep them?</p>
+    ${chipTabs([["decide", "Can we share this?"], ["requests", "Requests register"], ["retention", "How long to keep records"]], shareTab)}`;
+  const wireTabs = () => $$("[data-tab]").forEach((b) => { b.onclick = () => { shareTab = b.dataset.tab; render(); }; });
+
+  if (shareTab === "retention") {
+    app.innerHTML = head + `
+      <div class="panel md"><table><thead><tr><th>Record</th><th>Keep for</th><th>Law</th></tr></thead><tbody>
+      ${R.retention.map((x) => `<tr><td>${esc(x.record)}${x.note ? `<div class="meta">${esc(x.note)}</div>` : ""}${x.verify ? `<div class="meta"><strong>Please check:</strong> ${esc(x.verify)}</div>` : ""}</td>
+        <td>${esc(x.keep)}</td><td>${esc(x.law)}</td></tr>`).join("")}</tbody></table></div>
+      <h2>Before anything is destroyed</h2><div class="panel"><ol>${R.destructionSteps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol></div>
+      <div class="row"><button type="button" class="btn" id="ret-draft">Write our records retention policy</button></div>`;
+    wireTabs();
+    $("#ret-draft").onclick = () => { pending.draftType = "retention_policy"; go("draft"); };
+    return;
+  }
+
+  if (shareTab === "requests") {
+    const list = regSort("requests", regRows("requests"), regCtx());
+    const open = list.filter((x) => x.st[0] !== "done").length;
+    app.innerHTML = head + `${readOnlyNote()}
+      ${open ? `<div class="banner warn"><strong>${open} request${open > 1 ? "s" : ""} still pending.</strong></div>` : ""}
+      <div class="row"><button type="button" class="btn" id="rq-add">+ Log a request</button></div>
+      <div class="cards">${S.loaded.reg ? (list.map((x) => regCard("requests", x.r, x.st)).join("") || `<div class="banner info">No requests logged yet.</div>`) : `<p class="meta">Loading...</p>`}</div>`;
+    wireTabs();
+    $("#rq-add").onclick = () => regEdit("requests", {}, { received_on: todayIso(), outcome: "Pending" });
+    wireRegCards("requests");
+    return;
+  }
+
+  const groups = {};
+  R.types.forEach((t) => (groups[t.group] = groups[t.group] || []).push(t));
+  app.innerHTML = head + `
+    <div class="panel step"><div class="step-no">Step 1</div><div class="q">What record do they want?</div>
+      ${Object.entries(groups).map(([g, list]) => `<div class="group-title">${esc(g)}</div>${choiceList("srec", list.map((t) => ({ id: t.id, title: t.title })), shareSel.record)}`).join("")}</div>
+    <div class="panel step"><div class="step-no">Step 2</div><div class="q">Who is asking?</div>
+      ${choiceList("sreq", R.requesters.map(([id, title]) => ({ id, title })), shareSel.requester)}</div>
+    <div id="share-out"></div>`;
+  wireTabs(); wireChoices(app);
+  const out = $("#share-out");
+  const draw = () => {
+    const recId = ($("input[name=srec]:checked") || {}).value;
+    const reqId = ($("input[name=sreq]:checked") || {}).value;
+    Object.assign(shareSel, { record: recId || "", requester: reqId || "" });
+    if (!recId || !reqId) { out.innerHTML = `<div class="banner info">Choose the record and the requester to see the answer.</div>`; return; }
+    const rec = R.types.find((t) => t.id === recId), reqTitle = R.requesters.find((q) => q[0] === reqId)[1];
+    const d = R.matrix[recId][reqId];
+    out.innerHTML = `<div class="panel"><div class="lbl">The answer</div><h2 style="margin-top:0.3rem">${esc(reqTitle)} wants ${esc(rec.title.toLowerCase())}</h2>
+      ${shareAnswerHtml(rec, reqTitle, d, R.generalSteps)}
+      <label class="field" for="sh-detail">Anything particular about this request? (optional, used by the buttons below)</label>
+      <textarea id="sh-detail" placeholder="e.g. Sub-Inspector, Maradu PS, crime no. 123/2026, wants the case sheet of an MLC patient by Friday"></textarea>
+      <div class="row"><button type="button" class="btn" id="sh-log">Log this request</button><button type="button" class="btn light" id="sh-ask">Ask the assistant to confirm</button>
+        <button type="button" class="btn light" id="sh-draft">Write the reply</button></div>
+      <p class="meta">A first answer from the general rules. Facts can change it: take Legal's view before releasing anything sensitive.</p></div>`;
+    const detail = () => $("#sh-detail").value.trim();
+    $("#sh-log").onclick = () => regEdit("requests", {}, { received_on: todayIso(), requester: reqId, record: recId, what: detail(), outcome: d.verdict === "no" ? "Refused" : "Pending" },
+      () => { shareTab = "requests"; render(); });
+    $("#sh-ask").onclick = () => { pending.question = shareQuestion(rec, reqTitle, d, detail()); go("ask"); };
+    $("#sh-draft").onclick = () => {
+      pending.draftType = "records_reply";
+      pending.draftAnswers = { requester: reqTitle + (detail() ? " - " + detail() : ""), asked: rec.title, decision: `${d.label}. ${d.summary} ${d.conditions.join(" ")}` };
+      go("draft");
+    };
+  };
+  $$("input[name=srec], input[name=sreq]").forEach((i) => i.addEventListener("change", draw));
+  draw();
+};
+screens.share.live = ["reg"];
+
+/* --------------------------------------------------------- committees & decisions */
+let comTab = "committees";
+screens.committees = () => {
+  const ctx = regCtx(), rows = regRows(comTab), list = regSort(comTab, rows, ctx);
+  const attention = list.filter((x) => ["overdue", "today", "soon"].includes(x.st[0])).length;
+  const intro = {
+    committees: "Board committees and the hospital's statutory committees. Enter the last meeting date to see when the next one is due, and the date each must be reconstituted or re-registered.",
+    transplant: "Living-donor files for the Transplant Authorisation Committee. Choose who the donor is to get the document list, and tick each item as it is verified. Use the case number, not patient names.",
+    decisions: "Decisions of the Board and its committees, who must act and by when. This list becomes the Action Taken Report (matters arising) for the next Board meeting.",
+  }[comTab];
+  const extra = {
+    committees: `<button type="button" class="btn light" id="c-minutes">Write minutes from rough notes</button><button type="button" class="btn light" id="c-tor">Write a committee's terms of reference</button>`,
+    transplant: `<button type="button" class="btn light" id="t-vet">Ask the assistant to check a file</button><button type="button" class="btn light" id="t-minutes">Write committee minutes and decision</button>`,
+    decisions: `<button type="button" class="btn light" id="d-atr">Write the Action Taken Report</button>`,
+  }[comTab];
+  const empty = comTab === "committees"
+    ? `<div class="banner info">No committees listed yet. <button type="button" class="linklike" id="c-seed">Add the usual committees</button> (Audit, NRC, CSR, Transplant Authorisation, Ethics, POSH and the NABH committees), then edit them.</div>`
+    : `<div class="banner info">Nothing here yet.</div>`;
+  app.innerHTML = `${back()}<h1>Committees &amp; decisions</h1>
+    ${chipTabs([["committees", "Committees"], ["transplant", "Transplant files"], ["decisions", "Board decisions to follow up"]], comTab)}
+    <p class="lead">${esc(intro)}</p>${readOnlyNote()}
+    ${comTab === "transplant" ? `<div class="banner warn">${esc(DATA.transplantVerify)}</div>` : ""}
+    ${attention ? `<div class="banner warn"><strong>${attention} need${attention > 1 ? "" : "s"} attention now.</strong></div>` : ""}
+    <div class="row"><button type="button" class="btn" id="c-add">+ Add a ${esc(ctx.spec[comTab].singular)}</button>${extra}</div>
+    <div class="cards">${S.loaded.reg ? (list.map((x) => regCard(comTab, x.r, x.st)).join("") || empty) : `<p class="meta">Loading...</p>`}</div>`;
+  $$("[data-tab]").forEach((b) => { b.onclick = () => { comTab = b.dataset.tab; render(); }; });
+  const presets = { decisions: { status: "Open" }, transplant: { received_on: todayIso(), decision: "Pending", organ: "Kidney" } }[comTab] || {};
+  $("#c-add").onclick = () => regEdit(comTab, {}, presets);
+  wireRegCards(comTab);
+  const on = (id, fn) => { const el = $("#" + id); if (el) el.onclick = fn; };
+  on("c-seed", async () => {
+    const fields = DATA.registers.committees.fields.map((f) => f.key);
+    await write(async () => {
+      for (const p of DATA.committeePresets) {
+        const row = Object.fromEntries(fields.map((k) => [k, p[k] ?? (k === "every_days" ? null : "")]));
+        await cap.db.doc("reg_committees/" + newId()).set({ ...row, by: cap.uid, at: new Date().toISOString() });
+      }
+    });
+  });
+  on("c-minutes", () => { pending.draftType = "minutes"; go("draft"); });
+  on("c-tor", () => { pending.draftType = "committee_constitution"; go("draft"); });
+  on("t-vet", () => { pending.vetType = "transplant_file"; go("vet"); });
+  on("t-minutes", () => { pending.draftType = "tac_minutes"; go("draft"); });
+  on("d-atr", () => {
+    const open = rows.filter((r) => r.status !== "Dropped");
+    if (!open.length) return flash("Add the decisions first, then press this button.");
+    pending.draftType = "action_taken_report";
+    pending.draftAnswers = { items: atrText(open) };
+    go("draft");
+  });
+};
+screens.committees.live = ["reg"];
 
 /* ---------------------------------------------------------------- library */
 function docCard(d) {
@@ -1537,6 +1719,12 @@ Folders for Board papers, registers, policies, contracts, licences and more. Sea
 ### Filing calendar and licences
 The calendar shows what is due for our financial year. When a filing is done press **Mark as done** and note the SRN; everyone sees it. Set the AGM date so AOC-4 and MGT-7 dates are right. Enter each licence's expiry date once to be warned 90 and 30 days ahead.
 
+### Can we share this?
+When someone asks for our records, choose the record and who is asking. You get a first answer (yes, yes with conditions, get approval first, or no), the law and what to check. **Log this request** keeps it in the Requests register; **Write the reply** drafts the letter. **How long to keep records** gives the retention periods.
+
+### Committees & decisions
+Keep each committee's members and last meeting date to see when the next meeting or reconstitution is due. Track Transplant Authorisation Committee files with the document checklist for each kind of donor (use case numbers, not patient names). Enter Board decisions with an owner and due date; **Write the Action Taken Report** turns them into the "matters arising" paper.
+
 ### Things to know
 - The assistant cannot look things up on the internet here. It says when a point should be checked on the official portal.
 - It reads text. For a scanned PDF it reads pictures of the first few pages.
@@ -1545,7 +1733,7 @@ The calendar shows what is due for our financial year. When a filing is done pre
 };
 
 /* ================================================================== router */
-const ROUTES = ["home", "ask", "vet", "draft", "calendar", "events", "licences", "library", "removed", "guides", "settings", "help"];
+const ROUTES = ["home", "ask", "vet", "draft", "calendar", "events", "licences", "share", "committees", "library", "removed", "guides", "settings", "help"];
 function parse(hash) {
   const t = String(hash || "").replace(/^#/, "");
   const m = t.match(/^(event|folder|doc)-(.+)$/);

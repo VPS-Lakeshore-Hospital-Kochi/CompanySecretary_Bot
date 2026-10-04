@@ -412,6 +412,10 @@ screens.home = () => {
         <div class="d">New director, loan taken, shares issued, legal notice received, data leak... get the checklist of what to do.</div></button>
       <button class="tile" onclick="go('licences')"><span class="num">06</span><span class="t">Licences &amp; renewals</span>
         <div class="d">Keep expiry dates of hospital licences (AERB, PCPNDT, fire, pollution, drugs...) and see what needs renewing.</div></button>
+      <button class="tile" onclick="go('share')"><span class="num">07</span><span class="t">Can we share this?</span>
+        <div class="d">A shareholder, the police, a court, an insurer or a patient's family wants our records. See what the law allows, log the request, and check how long to keep records.</div></button>
+      <button class="tile" onclick="go('committees')"><span class="num">08</span><span class="t">Committees &amp; decisions</span>
+        <div class="d">Board and hospital committees, Transplant Authorisation Committee files, and Board decisions to follow up for the Action Taken Report.</div></button>
     </div>
     <div class="tiles" style="margin-top:1rem">
       <button class="tile small" onclick="go('library')"><span class="t">Document library</span><div class="d">Minutes, registers, policies, contracts, licences, templates - in folders.</div></button>
@@ -505,10 +509,11 @@ function wireChoices(root) {
 }
 
 screens.vet = () => {
+  const vetChosen = pending.vetType || "nda"; delete pending.vetType;
   app.innerHTML = `${backButton()}
     <h1>Check a document</h1>
     <p class="lead">Three simple steps. The assistant reads the whole document and tells you whether it is safe to sign.</p>
-    <div class="step"><div class="label">Step 1</div><div class="q">What kind of document is it?</div>${choiceList("vtype", META.vet_types, "nda")}</div>
+    <div class="step"><div class="label">Step 1</div><div class="q">What kind of document is it?</div>${choiceList("vtype", META.vet_types, vetChosen)}</div>
     <div class="step"><div class="label">Step 2</div><div class="q">Add the document</div><div id="vet-up"></div></div>
     <div class="step"><div class="label">Step 3</div><div class="q">A little background (optional)</div>
       <label class="field" for="role">Which side are we on?</label>
@@ -545,6 +550,7 @@ screens.draft = () => {
   const groups = {};
   META.draft_types.forEach(d => (groups[d.group] = groups[d.group] || []).push(d));
   const chosen = pending.draftType || "nda"; delete pending.draftType;
+  let prefill = pending.draftAnswers || null; delete pending.draftAnswers;
   app.innerHTML = `${backButton()}
     <h1>Write a document</h1>
     <p class="lead">Pick the document, answer a few questions, and the assistant writes a complete first draft you can download in Word.</p>
@@ -565,6 +571,7 @@ screens.draft = () => {
     const d = META.draft_types.find(x => x.id === id);
     qs.innerHTML = d.questions.map(q => `<label class="field" for="f-${q.key}">${esc(q.label)}</label>` +
       (q.kind === "textarea" ? `<textarea id="f-${q.key}" data-k="${q.key}"></textarea>` : `<input type="text" id="f-${q.key}" data-k="${q.key}">`)).join("");
+    if (prefill) { qs.querySelectorAll("[data-k]").forEach(el => { if (prefill[el.dataset.k]) el.value = prefill[el.dataset.k]; }); prefill = null; }
   }
   app.querySelectorAll("input[name=dtype]").forEach(i => i.addEventListener("change", drawQs));
   drawQs();
@@ -692,7 +699,8 @@ screens.events = () => {
       go("ask");
     };
     document.getElementById("ev-draft").onclick = () => {
-      pending.draftType = { legal_notice: "reply_legal_notice", consumer_case: "consumer_reply", govt_notice: "roc_reply" }[e.id] || "board_resolution";
+      pending.draftType = { legal_notice: "reply_legal_notice", consumer_case: "consumer_reply", govt_notice: "roc_reply", board_meeting_held: "minutes",
+        records_request: "records_reply", transplant_case: "tac_minutes" }[e.id] || "board_resolution";
       go("draft");
     };
     return;
@@ -748,6 +756,171 @@ screens.licences = async () => {
   };
   document.getElementById("add").onclick = () => edit({});
   app.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => edit(list.find(l => String(l.id) === b.dataset.edit)));
+};
+
+/* ----------------------------------------------------------- registers (shared logic in registers.js) */
+const regCtx = () => ({ spec: META.registers, checklist: META.transplant_checklist });
+
+function regCard(kind, r, st, extra = "") {
+  return `<div class="card ${st[0]}"><div><div class="title">${esc(regTitle(kind, r))}</div>
+      <div class="meta">${regMeta(kind, r, regCtx())}</div>
+      ${kind === "decisions" && r.decision ? `<div class="meta">${esc(r.decision)}</div>` : ""}
+      ${kind === "requests" && r.what ? `<div class="meta">${esc(r.what)}</div>` : ""}</div>
+    <div class="due"><span class="pill ${st[0]}">${esc(st[1])}</span></div>
+    <div class="actions no-print"><button class="btn light" data-redit="${r.id}">Open / update</button>${extra}</div></div>`;
+}
+
+/** Add or edit a row in a register. `preset` fills a new row. */
+function regEdit(kind, r, after, preset = {}) {
+  const ctx = regCtx(), spec = ctx.spec[kind];
+  const row = r.id ? r : { ...preset };
+  const d = document.getElementById("dlg");
+  d.innerHTML = `<h2 style="margin-top:0">${r.id ? "Update" : "Add a"} ${esc(spec.singular)}</h2>
+    ${kind === "transplant" ? `<div class="banner warn">${esc(META.transplant_verify)}</div>` : ""}
+    ${regFormHtml(kind, row, ctx)}
+    <div class="btn-row"><button class="btn" id="r-save">Save</button><button class="btn light" id="r-cancel">Cancel</button>
+    ${r.id ? `<button class="btn danger" id="r-del">Delete</button>` : ""}</div>`;
+  d.showModal();
+  regWireForm(kind, d, ctx);
+  d.querySelector("#r-cancel").onclick = () => d.close();
+  d.querySelector("#r-save").onclick = async () => {
+    const { data, missing } = regReadForm(kind, d, ctx);
+    if (missing) return flash(`Please fill in: ${missing}.`);
+    try {
+      await api(`/api/register/${kind}`, { method: "POST", body: JSON.stringify({ ...data, id: r.id }) });
+      d.close(); after();
+    } catch (e) { flash(e.message); }
+  };
+  if (r.id) d.querySelector("#r-del").onclick = async () => {
+    if (!confirm(`Delete this ${spec.singular}?`)) return;
+    await api(`/api/register/${kind}/${r.id}`, { method: "DELETE" }); d.close(); after();
+  };
+}
+
+function tabsHtml(tabs, on) {
+  return `<div class="filters no-print">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${k === on ? "on" : ""}">${esc(l)}</button>`).join("")}</div>`;
+}
+
+/* ------------------------------------------------------------- can we share this? */
+let shareTab = "decide";
+const shareSel = { record: "", requester: "" };
+screens.share = async (param) => {
+  if (param) shareTab = param;
+  const R = META.records;
+  const tabs = [["decide", "Can we share this?"], ["requests", "Requests register"], ["retention", "How long to keep records"]];
+  const head = `${backButton()}<h1>Records: share or keep?</h1>
+    <p class="lead">Someone wants our records. Can we give them, and on what terms? How long must we keep them?</p>${tabsHtml(tabs, shareTab)}`;
+  const wireTabs = () => app.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { shareTab = b.dataset.tab; screens.share(); });
+
+  if (shareTab === "retention") {
+    app.innerHTML = head + `
+      <div class="step md"><table><thead><tr><th>Record</th><th>Keep for</th><th>Law</th></tr></thead><tbody>
+      ${R.retention.map(x => `<tr><td>${esc(x.record)}${x.note ? `<div class="meta">${esc(x.note)}</div>` : ""}${x.verify ? `<div class="meta" style="color:var(--magenta)">Please check: ${esc(x.verify)}</div>` : ""}</td>
+        <td>${esc(x.keep)}</td><td>${esc(x.law)}</td></tr>`).join("")}</tbody></table></div>
+      <h2>Before anything is destroyed</h2><div class="step"><ol>${R.destruction_steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol></div>
+      <div class="btn-row no-print"><button class="btn" id="ret-draft">Write our records retention policy</button><button class="btn light" onclick="window.print()">Print</button></div>`;
+    wireTabs();
+    document.getElementById("ret-draft").onclick = () => { pending.draftType = "retention_policy"; go("draft"); };
+    return;
+  }
+
+  if (shareTab === "requests") {
+    app.innerHTML = head + `<p class="lead">Loading...</p>`;
+    const rows = await api("/api/register/requests");
+    const list = regSort("requests", rows, regCtx());
+    const open = list.filter(x => x.st[0] !== "done").length;
+    app.innerHTML = head + `
+      ${open ? `<div class="banner warn"><strong>${open} request${open > 1 ? "s" : ""} still pending.</strong></div>` : ""}
+      <div class="btn-row no-print"><button class="btn" id="rq-add">+ Log a request</button><button class="btn light" onclick="window.print()">Print the register</button></div>
+      <div class="cards">${list.length ? list.map(x => regCard("requests", x.r, x.st)).join("") : `<div class="banner info">No requests logged yet.</div>`}</div>`;
+    wireTabs();
+    const reload = () => screens.share("requests");
+    document.getElementById("rq-add").onclick = () => regEdit("requests", {}, reload, { received_on: todayIso(), outcome: "Pending" });
+    app.querySelectorAll("[data-redit]").forEach(b => b.onclick = () => regEdit("requests", rows.find(r => String(r.id) === b.dataset.redit), reload));
+    return;
+  }
+
+  const groups = {};
+  R.types.forEach(t => (groups[t.group] = groups[t.group] || []).push(t));
+  app.innerHTML = head + `
+    <div class="step"><div class="label">Step 1</div><div class="q">What record do they want?</div>
+      ${Object.entries(groups).map(([g, list]) => `<div class="group-title">${esc(g)}</div>${choiceList("srec", list.map(t => ({ id: t.id, title: t.title })), shareSel.record)}`).join("")}</div>
+    <div class="step"><div class="label">Step 2</div><div class="q">Who is asking?</div>
+      ${choiceList("sreq", R.requesters.map(([id, title]) => ({ id, title })), shareSel.requester)}</div>
+    <div id="share-out"></div>`;
+  wireTabs(); wireChoices(app);
+  const out = document.getElementById("share-out");
+  const draw = () => {
+    const recId = (app.querySelector("input[name=srec]:checked") || {}).value;
+    const reqId = (app.querySelector("input[name=sreq]:checked") || {}).value;
+    Object.assign(shareSel, { record: recId || "", requester: reqId || "" });
+    if (!recId || !reqId) { out.innerHTML = `<div class="banner info">Choose the record and the requester to see the answer.</div>`; return; }
+    const rec = R.types.find(t => t.id === recId), reqTitle = R.requesters.find(q => q[0] === reqId)[1];
+    const d = R.matrix[recId][reqId];
+    out.innerHTML = `<div class="step"><div class="label">The answer</div><div class="q">${esc(reqTitle)} wants ${esc(rec.title.toLowerCase())}</div>
+      ${shareAnswerHtml(rec, reqTitle, d, R.general_steps)}
+      <label class="field" for="sh-detail">Anything particular about this request? (optional, used by the buttons below)</label>
+      <textarea id="sh-detail" placeholder="e.g. Sub-Inspector, Maradu PS, crime no. 123/2026, wants the case sheet of an MLC patient by Friday"></textarea>
+      <div class="btn-row no-print"><button class="btn" id="sh-log">Log this request</button><button class="btn light" id="sh-ask">Ask the assistant to confirm</button>
+        <button class="btn light" id="sh-draft">Write the reply</button><button class="btn light" onclick="window.print()">Print</button></div>
+      <p class="meta">A first answer from the general rules. Facts can change it: take Legal's view before releasing anything sensitive.</p></div>`;
+    const detail = () => document.getElementById("sh-detail").value.trim();
+    document.getElementById("sh-log").onclick = () => regEdit("requests", {}, () => { shareTab = "requests"; screens.share(); },
+      { received_on: todayIso(), requester: reqId, record: recId, what: detail(), outcome: d.verdict === "no" ? "Refused" : "Pending" });
+    document.getElementById("sh-ask").onclick = () => { pending.question = shareQuestion(rec, reqTitle, d, detail()); go("ask"); };
+    document.getElementById("sh-draft").onclick = () => {
+      pending.draftType = "records_reply";
+      pending.draftAnswers = { requester: reqTitle + (detail() ? " - " + detail() : ""), asked: rec.title, decision: `${d.label}. ${d.summary} ${d.conditions.join(" ")}` };
+      go("draft");
+    };
+  };
+  app.querySelectorAll("input[name=srec], input[name=sreq]").forEach(i => i.addEventListener("change", draw));
+  draw();
+};
+
+/* ------------------------------------------------------------- committees & decisions */
+let comTab = "committees";
+screens.committees = async (param) => {
+  if (param) comTab = param;
+  const tabs = [["committees", "Committees"], ["transplant", "Transplant files"], ["decisions", "Board decisions to follow up"]];
+  app.innerHTML = `${backButton()}<h1>Committees &amp; decisions</h1><p class="lead">Loading...</p>`;
+  const rows = await api(`/api/register/${comTab}`);
+  const ctx = regCtx(), list = regSort(comTab, rows, ctx);
+  const attention = list.filter(x => ["overdue", "today", "soon"].includes(x.st[0])).length;
+  const intro = {
+    committees: "Board committees and the hospital's statutory committees. Enter the last meeting date to see when the next one is due, and the date each must be reconstituted or re-registered.",
+    transplant: "Living-donor files for the Transplant Authorisation Committee. Choose who the donor is to get the document list, and tick each item as it is verified. Use the case number, not patient names.",
+    decisions: "Decisions of the Board and its committees, who must act and by when. This list becomes the Action Taken Report (matters arising) for the next Board meeting.",
+  }[comTab];
+  const extraButtons = {
+    committees: `<button class="btn light" id="c-minutes">Write minutes from rough notes</button><button class="btn light" id="c-tor">Write a committee's terms of reference</button>`,
+    transplant: `<button class="btn light" id="t-vet">Ask the assistant to check a file</button><button class="btn light" id="t-minutes">Write committee minutes and decision</button>`,
+    decisions: `<button class="btn light" id="d-atr">Write the Action Taken Report</button>`,
+  }[comTab];
+  app.innerHTML = `${backButton()}<h1>Committees &amp; decisions</h1>${tabsHtml(tabs, comTab)}
+    <p class="lead">${esc(intro)}</p>
+    ${comTab === "transplant" ? `<div class="banner warn">${esc(META.transplant_verify)}</div>` : ""}
+    ${attention ? `<div class="banner warn"><strong>${attention} need${attention > 1 ? "" : "s"} attention now.</strong></div>` : ""}
+    <div class="btn-row no-print"><button class="btn" id="c-add">+ Add a ${esc(ctx.spec[comTab].singular)}</button>${extraButtons}
+      <button class="btn light" onclick="window.print()">Print</button></div>
+    <div class="cards">${list.length ? list.map(x => regCard(comTab, x.r, x.st)).join("") : `<div class="banner info">Nothing here yet.</div>`}</div>`;
+  app.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { comTab = b.dataset.tab; screens.committees(); });
+  const reload = () => screens.committees();
+  const presets = { decisions: { status: "Open" }, transplant: { received_on: todayIso(), decision: "Pending", organ: "Kidney" } }[comTab] || {};
+  document.getElementById("c-add").onclick = () => regEdit(comTab, {}, reload, presets);
+  app.querySelectorAll("[data-redit]").forEach(b => b.onclick = () => regEdit(comTab, rows.find(r => String(r.id) === b.dataset.redit), reload));
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  on("c-minutes", () => { pending.draftType = "minutes"; go("draft"); });
+  on("c-tor", () => { pending.draftType = "committee_constitution"; go("draft"); });
+  on("t-vet", () => { pending.vetType = "transplant_file"; go("vet"); });
+  on("t-minutes", () => { pending.draftType = "tac_minutes"; go("draft"); });
+  on("d-atr", () => {
+    const open = rows.filter(r => r.status !== "Dropped");
+    if (!open.length) return flash("Add the decisions first, then press this button.");
+    pending.draftType = "action_taken_report";
+    pending.draftAnswers = { items: atrText(open) };
+    go("draft");
+  });
 };
 
 /* ----------------------------------------------------------------- library */
@@ -1019,6 +1192,8 @@ screens.help = () => {
       <h3>Writing a document</h3><p>Home &rarr; <strong>Write a document</strong>. Choose the document, fill in the details you know, and press <strong>Write the document</strong>. Press <strong>Download as Word</strong> to open it in Microsoft Word.</p>
       <h3>Filing calendar</h3><p>Shows what is due, worked out for our financial year. When a filing is done, press <strong>Mark as done</strong> and note the SRN. Enter the AGM date so that AOC-4 and MGT-7 dates are right.</p>
       <h3>Licences</h3><p>Enter each licence's expiry date once; the tool warns 90 and 30 days ahead.</p>
+      <h3>Can we share this?</h3><p>When someone asks for our records, choose the record and who is asking. You get a first answer (yes, yes with conditions, get approval first, or no), the law, and what to check. Press <strong>Log this request</strong> to keep it in the Requests register, or <strong>Write the reply</strong>. The <strong>How long to keep records</strong> tab gives the retention periods.</p>
+      <h3>Committees &amp; decisions</h3><p>Keep each committee's members and last meeting date to see when the next meeting or reconstitution is due. Track Transplant Authorisation Committee files with the document checklist for each kind of donor. Enter Board decisions with an owner and due date; <strong>Write the Action Taken Report</strong> turns them into the "matters arising" paper for the next Board meeting.</p>
       <h3>Document library</h3><p>Home &rarr; <strong>Open the library</strong>, or type in the search box on the Home screen. Documents are kept in folders (Board meetings, registers, policies, contracts, licences and so on). Press <strong>+ Add documents</strong> to add files. Open any document to preview it, download it, upload a newer version (older versions are kept), or press <strong>Ask about this document</strong>, <strong>Check this document</strong> or <strong>Use it to write a new document</strong>. When you ask a question, the assistant also searches the library by itself and names the documents it used.</p>
       <h3>Saving your work</h3><p>After any answer, review or draft, press <strong>Save to library</strong>. It is saved as a Word file in the Lakeshore format, in the folder you choose.</p>
       <h3>Signing in</h3><p>Each person has their own username and password. Press <strong>Sign out</strong> at the top when you leave a shared computer. If you forget your password, ask the administrator to set a new one.</p>

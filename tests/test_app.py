@@ -257,3 +257,30 @@ def test_bad_tool_input_is_returned_as_error(client):
     events(client.post("/api/chat", json={"mode": "ask", "turns": [{"role": "user", "text": "x"}]}))
     res = CAPTURED[start + 1]["body"]["messages"][-1]["content"][0]
     assert res["is_error"] is True
+
+
+def test_registers_crud_and_committee_seed(client):
+    m = client.get("/api/meta").get_json()
+    assert set(m["registers"]) == {"committees", "transplant", "decisions", "requests"}
+    assert m["records"]["matrix"]["medical"]["self"]["verdict"] == "yes"
+
+    committees = client.get("/api/register/committees").get_json()
+    assert any(c["name"] == "Transplant Authorisation Committee" for c in committees)
+
+    r = client.post("/api/register/transplant", json={"case_ref": "TX-2026-014", "relation": "spouse",
+                                                      "checks": {"app": True, "marriage": True}, "decision": "Pending"})
+    assert r.status_code == 200
+    tid = r.get_json()["id"]
+    row = next(x for x in client.get("/api/register/transplant").get_json() if x["id"] == tid)
+    assert row["checks"] == {"app": True, "marriage": True} and row["updated_by"] == "cs"
+
+    assert client.post("/api/register/decisions", json={"item": ""}).status_code == 400
+    assert client.post("/api/register/committees", json={"name": "X", "every_days": "often"}).status_code == 400
+    assert client.post("/api/register/nonsense", json={}).status_code == 404
+
+    r = client.post("/api/register/transplant", json={"id": tid, "case_ref": "TX-2026-014", "relation": "spouse", "decision": "Approved"})
+    assert r.status_code == 200
+    assert client.delete(f"/api/register/transplant/{tid}").status_code == 200
+    assert not [x for x in client.get("/api/register/transplant").get_json() if x["id"] == tid]
+    log = client.get("/api/activity").get_json()
+    assert any("transplant" in (a["detail"] or "") for a in log)

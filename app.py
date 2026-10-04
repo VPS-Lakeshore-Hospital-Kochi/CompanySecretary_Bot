@@ -21,7 +21,7 @@ from flask import (Flask, Response, abort, g, jsonify, request, send_file, send_
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from cs_assistant import calendar as cal
-from cs_assistant import documents, export, files, library, llm, store
+from cs_assistant import documents, export, files, library, llm, records, registers, store
 from cs_assistant.knowledge import OFFICIAL_LINKS
 
 
@@ -290,6 +290,18 @@ def meta():
         "events": cal.EVENTS,
         "library_folders": [{"id": c[0], "name": c[1], "hint": c[2]} for c in library.CATEGORIES],
         "links": OFFICIAL_LINKS,
+        "registers": registers.spec(),
+        "transplant_checklist": [list(x) for x in registers.TRANSPLANT_CHECKLIST],
+        "transplant_verify": registers.TRANSPLANT_VERIFY,
+        "committee_presets": registers.COMMITTEE_PRESETS,
+        "records": {
+            "requesters": [list(x) for x in records.REQUESTERS],
+            "types": [{k: r[k] for k in ("id", "title", "examples", "group")} for r in records.RECORDS],
+            "matrix": records.matrix(),
+            "general_steps": records.GENERAL_STEPS,
+            "retention": records.RETENTION,
+            "destruction_steps": records.DESTRUCTION_STEPS,
+        },
     })
 
 
@@ -621,6 +633,40 @@ def licence_save():
 def licence_delete(lic_id: int):
     store.delete_licence(lic_id)
     store.log(_who(), "Deleted licence", f"#{lic_id}")
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------- registers
+def _kind_or_404(kind: str) -> str:
+    if kind not in registers.REGISTERS:
+        abort(404)
+    return kind
+
+
+@app.get("/api/register/<kind>")
+def register_list(kind: str):
+    return jsonify(store.list_rows(_kind_or_404(kind)))
+
+
+@app.post("/api/register/<kind>")
+def register_save(kind: str):
+    _kind_or_404(kind)
+    b = request.get_json(force=True)
+    try:
+        data = registers.validate(kind, b)
+        row_id = store.save_row(kind, data, int(b["id"]) if b.get("id") else None, _who())
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    label = data.get(registers.REGISTERS[kind]["required"], "")
+    store.log(_who(), f"Saved {registers.REGISTERS[kind]['singular']}", f"{kind}: {label}")
+    return jsonify({"id": row_id})
+
+
+@app.delete("/api/register/<kind>/<int:row_id>")
+def register_delete(kind: str, row_id: int):
+    _kind_or_404(kind)
+    store.delete_row(kind, row_id)
+    store.log(_who(), f"Deleted {registers.REGISTERS[kind]['singular']}", f"{kind} #{row_id}")
     return jsonify({"ok": True})
 
 

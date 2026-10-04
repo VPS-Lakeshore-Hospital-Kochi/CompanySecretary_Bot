@@ -2,7 +2,7 @@
 
 This is the map the CS Assistant was built from. It covers the work of the Company Secretary (CS) and the in-house legal team of a large private multi-speciality hospital company in Kerala with foreign shareholding (as at September 2026). For each area it notes which part of the tool helps.
 
-**Screens:** Ask = Ask a question · Check = Check a document · Write = Write a document · Calendar = Filing calendar · Events = Something happened? · Licences = Licences & renewals · Library = Document library (every record listed below can be kept there, in its own folder, and the assistant can read it)
+**Screens:** Ask = Ask a question · Check = Check a document · Write = Write a document · Calendar = Filing calendar · Events = Something happened? · Licences = Licences & renewals · Share = Can we share this? · Committees = Committees & decisions · Library = Document library (every record listed below can be kept there, in its own folder, and the assistant can read it)
 
 ---
 
@@ -15,7 +15,8 @@ This is the map the CS Assistant was built from. It covers the work of the Compa
 | Meetings by video conference: rules, attendance, recording | Rule 3, Meetings of Board Rules | Ask |
 | Resolutions by circulation | Sec. 175 | Write |
 | Minutes: draft within 15 days, sign within 30 days, keep the minute books | Sec. 118, SS-1 | Write (turns rough notes into minutes) |
-| Committees: Audit, NRC, CSR, Stakeholders; their terms of reference and minutes | Sec. 177, 178, 135 | Write, Ask |
+| Committees: Audit, NRC, CSR, Stakeholders; their terms of reference and minutes | Sec. 177, 178, 135 | Committees, Write, Ask |
+| Matters arising: follow up each Board decision; Action Taken Report for the next meeting | SS-1 | Committees (Board decisions), Write |
 | Directors' disclosures: MBP-1, DIR-8, independence declarations | Sec. 184, 164, 149(7) | Calendar |
 | AGM within 6 months of year end; notice 21 clear days before; explanatory statement | Sec. 96, 101, 102, SS-2 | Calendar, Write |
 | EGMs, postal ballots, e-voting where it applies | Sec. 100, 108, 110 | Write, Ask |
@@ -94,7 +95,28 @@ The legal team's biggest daily workload. **Write** has templates for each of the
 - POSH Act: an Internal Committee, an annual report to the District Officer, and the complaint numbers in the Board's report.
 - Doctors' and nurses' registrations; the Rights of Persons with Disabilities Act equal opportunity policy.
 
-## 10. Recent changes the tool is told about
+## 10. Hospital committees
+
+The CS office usually services, or keeps the records of, committees that hospital law requires as well as the Board's own committees. **Committees** lists them with their members, last meeting, the next meeting due and the reconstitution or registration date.
+
+| Committee | Law | What the CS watches |
+|---|---|---|
+| Transplant Authorisation Committee | THOTA 1994, Sec. 9; THOTA Rules 2014 | Government order constituting it and when it expires; every living-donor file complete for the kind of donor; separate interviews; video recording; decision with reasons, displayed and reported to the Appropriate Authority / K-SOTTO; right of appeal. **Committees > Transplant files** holds the document checklist for each file. **Check** reviews a file, and **Write** drafts the minutes and decision. |
+| Institutional Ethics Committee | NDCT Rules 2019; ICMR Guidelines 2017 | CDSCO and DHR registrations and their renewal; composition; records kept at least 5 years after a trial ends |
+| POSH Internal Committee | POSH Act 2013, Sec. 4, 21 | Composition (presiding woman officer, external member), 3-year tenure, annual report |
+| NABH committees (infection control, quality, pharmacy & therapeutics, medical records) | NABH standards | Meeting frequency and minutes for accreditation |
+
+## 11. Records: who may see them, and how long to keep them
+
+Requests for records arrive every week. **Share** gives a first answer for each kind of record and each kind of requester, keeps a **Requests register**, and shows a **retention schedule**.
+
+- **Company records.** Members may inspect the statutory registers and the minutes of general meetings (Sec. 94, 119), but not Board minutes. Directors may see the books of account (Sec. 128(3)). Auditors have access to all records (Sec. 143). The RoC can inspect under Sec. 206 and 207. Lenders get certified extracts of the resolutions they need, not the minutes. A buyer's or investor's due diligence happens under an NDA, in a data room, with approval.
+- **Patient records.** The patient gets copies within 72 hours (IMC Regulations 2002, Reg. 1.3.2). Anyone else needs the patient's consent, a written police requisition, or a summons or order (BNSS Sec. 94). Special laws protect HIV status, MTP, POCSO, mental health, ART and transplant files. The media and the public get nothing.
+- **People records.** Employees can see their own data (DPDP Act Sec. 11). POSH inquiry records must never be made public (Sec. 16).
+- **RTI** does not apply to a private hospital company.
+- **Retention.** Minutes and the main registers are kept permanently. Books of account: 8 years (Sec. 128(5)). PCPNDT: 2 years. Clinical trial records: 5 years after the trial. CERT-In logs: 180 days. Destroy records only under a Board-approved retention policy, and never anything under a litigation hold.
+
+## 12. Recent changes the tool is told about
 
 - BNS, BNSS and BSA replaced the IPC, CrPC and Evidence Act from 1 July 2024.
 - The Income-tax Act 2025 replaced the 1961 Act from 1 April 2026, and section numbers changed.

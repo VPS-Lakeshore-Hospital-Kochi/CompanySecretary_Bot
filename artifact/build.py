@@ -3,8 +3,9 @@
     python artifact/build.py        ->  artifact/dist/index.html (+ brand/, fonts/)
 
 The page is one self-contained HTML file. Its legal knowledge, filing calendar, event
-checklists, document types and the CS responsibilities guide are taken from the same Python
-modules the self-hosted site uses, so both versions stay in step. The logo and DM Sans font
+checklists, document types, registers, records-sharing rules and the CS responsibilities guide
+are taken from the same Python modules (and static/registers.js) the self-hosted site uses,
+so both versions stay in step. The logo and DM Sans font
 files are published beside the page (the Word export fetches them).
 """
 
@@ -20,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from cs_assistant import calendar as cal  # noqa: E402
-from cs_assistant import documents, library  # noqa: E402
+from cs_assistant import documents, library, records, registers  # noqa: E402
 from cs_assistant.knowledge import OFFICIAL_LINKS, SYSTEM_PROMPT  # noqa: E402
 
 HERE = os.path.join(ROOT, "artifact")
@@ -64,6 +65,18 @@ def data() -> dict:
         "systemPrompt": SYSTEM_PROMPT + ARTIFACT_NOTE,
         "guide": guide,
         "profileDefaults": profile,
+        "registers": registers.spec(),
+        "transplantChecklist": [list(x) for x in registers.TRANSPLANT_CHECKLIST],
+        "transplantVerify": registers.TRANSPLANT_VERIFY,
+        "committeePresets": registers.COMMITTEE_PRESETS,
+        "records": {
+            "requesters": [list(x) for x in records.REQUESTERS],
+            "types": [{k: r[k] for k in ("id", "title", "examples", "group")} for r in records.RECORDS],
+            "matrix": records.matrix(),
+            "generalSteps": records.GENERAL_STEPS,
+            "retention": records.RETENTION,
+            "destructionSteps": records.DESTRUCTION_STEPS,
+        },
     }
 
 
@@ -82,6 +95,7 @@ def main() -> None:
         # The brand's docx library, wrapped so it runs in the browser without Node's require.
         "function __lakeshoreFactory(require, module, exports, __dirname, process) {\n" + vendor + "\n}",
         read(SRC, "wordexport.js"),
+        read(ROOT, "static", "registers.js").replace('"use strict";', ""),
         read(SRC, "app.js"),
     ]).replace("</script", "<\\/script")
     page = read(SRC, "page.html")

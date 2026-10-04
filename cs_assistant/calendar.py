@@ -564,6 +564,48 @@ EVENTS: list[dict] = [
         "law": "THOTA 1994; Drugs & Cosmetics Act 1940; ART Act 2021; NDPS Act 1985; MHCA 2017; Kerala Clinical Establishments Act 2018",
     },
     {
+        "id": "board_meeting_held",
+        "title": "A Board or committee meeting has just been held",
+        "steps": [
+            "Circulate the draft minutes to all directors within 15 days; take comments within 7 days of circulation (SS-1).",
+            "Finalise the minutes and get them signed by the chairperson within 30 days of the meeting. Enter them in the minutes book with page numbers.",
+            "File MGT-14 within 30 days for resolutions that need it (Sec. 117(3) and 179(3)).",
+            "Issue certified true copies to banks, regulators or counterparties who need them.",
+            "Update the registers: MBP-1 disclosures, MBP-4 (contracts with interested parties), MBP-2 (loans and investments), directors & KMP.",
+            "Enter every decision with its owner and due date in 'Committees & decisions' > Board decisions. That becomes the Action Taken Report for the next meeting.",
+            "Note the date in the committee register, and check the next meeting falls within 120 days (Board) or the committee's own cycle.",
+        ],
+        "law": "Companies Act 2013, Sec. 117, 118, 173, 179; SS-1",
+    },
+    {
+        "id": "records_request",
+        "title": "Someone asks for our records (shareholder, police, court, insurer, patient's family)",
+        "steps": [
+            "Get the request in writing and note the date received and the deadline. A summons or police requisition has a fixed date: diarise it.",
+            "Check who is asking and their authority (ID, letter of authority, officer's name and rank, the court's seal).",
+            "Use 'Can we share this?' on the home screen to see whether the law allows it and on what conditions.",
+            "Patient records: the patient gets copies within 72 hours of a request. For anyone else you need the patient's written consent, a valid requisition or a court order.",
+            "Share copies, not originals. Redact other people's details. Mark them 'Confidential', and take an acknowledgement.",
+            "Record the request and the outcome in the Requests register. Send anything unusual (media, the parent group, a sensitive record) to Legal first.",
+        ],
+        "law": "Companies Act 2013, Sec. 94, 119, 128, 171; BNSS 2023, Sec. 94; IMC Regulations 2002, Reg. 1.3.2; DPDP Act 2023",
+    },
+    {
+        "id": "transplant_case",
+        "title": "A living-donor transplant file is going to the Authorisation Committee",
+        "steps": [
+            "Open a file in 'Committees & decisions' > Transplant files, using the case number, not the patient's name. Choose who the donor is to get the right document list.",
+            "Check every document on the list is in the file and verified against the originals before fixing the meeting.",
+            "Unrelated donor (affection or attachment): check the financial status of both sides and the evidence of association closely. Commercial dealing is an offence (Sec. 18-19).",
+            "Foreign national: get the embassy certificate, and confirm the Rules allow this donor-recipient combination.",
+            "Fix the meeting with a quorum. Make sure no member is part of the transplant team. Arrange the video recording and an interpreter.",
+            "After the meeting: record the decision with reasons, display it on the notice board within the time the Rules allow, and report it to the Appropriate Authority / K-SOTTO.",
+            "If approval is refused, tell the applicants in writing of their right of appeal to the State Government.",
+        ],
+        "law": "THOTA 1994, Sec. 9, 18, 19; THOTA Rules 2014",
+        "verify": "Form numbers and timelines are in the THOTA Rules 2014 and Kerala orders. Confirm them against the latest gazetted text and K-SOTTO circulars.",
+    },
+    {
         "id": "govt_notice",
         "title": "A notice is received from RoC / MCA, RBI, tax or any regulator",
         "steps": [

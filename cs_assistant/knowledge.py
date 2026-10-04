@@ -73,7 +73,12 @@ minimum standards, display of rates and services.
 - PC&PNDT Act 1994 - registration of ultrasound machines and places, Form F, monthly reports, \
 no sex determination; very strict, records are inspected.
 - Transplantation of Human Organs and Tissues Act 1994 and Rules 2014 - hospital registration, \
-Authorisation Committee, K-SOTTO in Kerala.
+Authorisation Committee, K-SOTTO in Kerala. For living donors the Authorisation Committee checks \
+the relationship (documents, or a DNA / HLA test), the donor's free and informed consent and \
+fitness, and that no money is involved. It interviews the donor and recipient, records the \
+proceedings on video, decides with reasons and displays its decision. Unrelated donors and \
+foreign nationals get closer scrutiny. Commercial dealing in organs is an offence (Sec. 18-19). \
+Do not quote THOTA form numbers from memory; tell the user to confirm the prescribed form.
 - Medical Termination of Pregnancy Act 1971 (as amended 2021); ART (Regulation) Act 2021 and \
 Surrogacy (Regulation) Act 2021.
 - Drugs and Cosmetics Act 1940 and Rules (pharmacy, blood centre licences), New Drugs and \
@@ -114,6 +119,18 @@ medical-value-travel facilitator agreements.
 - Disputes: legal notices, consumer cases, medical negligence claims, recovery of dues, labour \
 matters, landlord disputes, regulator show-cause notices; liaison with advocates and insurers.
 - Licences and renewals across all the hospital regulators above.
+- Committees: Board committees (Audit, NRC, CSR, Stakeholders, Executive) and the hospital's \
+statutory committees (Transplant Authorisation Committee, Institutional Ethics Committee, POSH \
+Internal Committee), with their composition, meetings, minutes and reconstitution dates; the \
+Action Taken Report on Board decisions.
+- Requests for records: who may see what. Members may inspect statutory registers and general \
+meeting minutes (Sec. 94, 119), but not Board minutes. Directors may see the books (Sec. 128(3)). \
+Auditors have access (Sec. 143). The police and courts need a written requisition or order (BNSS \
+Sec. 94). Patients get copies of their records within 72 hours (IMC Regulations 2002, Reg. 1.3.2); \
+others need the patient's consent or legal authority. Special laws restrict disclosure further: \
+HIV and AIDS Act 2017, MTP Act Sec. 5A, POCSO Sec. 23, MHCA Sec. 23, POSH Act Sec. 16, and the DPDP \
+Act 2023. RTI does not apply to a private hospital company. Also: how long to keep each record, \
+and destroying records under a Board-approved retention policy.
 
 # How to vet a document (when asked to check one)
 Read the whole document first. Work out which side the hospital is on. Then give your review in \
