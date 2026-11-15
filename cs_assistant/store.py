@@ -67,6 +67,11 @@ def init() -> None:
         cols = {r["name"] for r in c.execute("PRAGMA table_info(filings)")}
         if "done_by" not in cols:
             c.execute("ALTER TABLE filings ADD COLUMN done_by TEXT")
+        ucols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
+        for col, decl in (("email", "TEXT"), ("totp_secret", "TEXT"), ("totp_last_step", "INTEGER"),
+                          ("recovery_codes", "TEXT"), ("session_version", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in ucols:
+                c.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
         if not c.execute("SELECT 1 FROM settings WHERE key='profile'").fetchone():
             with open(PROFILE_SEED, encoding="utf-8") as f:
                 c.execute("INSERT INTO settings VALUES ('profile', ?)", (f.read(),))
@@ -175,7 +180,8 @@ def delete_row(kind: str, row_id: int) -> None:
 
 
 # --------------------------------------------------------------------- users
-USER_FIELDS = "id, username, full_name, role, active, created, last_login"
+USER_FIELDS = ("id, username, full_name, role, active, created, last_login, email, session_version, "
+               "(totp_secret IS NOT NULL) AS two_step")
 
 
 def user_count() -> int:
@@ -200,22 +206,26 @@ def user_with_hash(username: str) -> dict | None:
     return dict(r) if r else None
 
 
-def create_user(username: str, full_name: str, password_hash: str, role: str = "member") -> int:
+def create_user(username: str, full_name: str, password_hash: str, role: str = "member", email: str = "") -> int:
     with db() as c:
         try:
-            cur = c.execute("INSERT INTO users (username, full_name, password_hash, role, created) VALUES (?,?,?,?,?)",
-                            (username.strip(), full_name.strip(), password_hash, role, _now()))
+            cur = c.execute("INSERT INTO users (username, full_name, password_hash, role, created, email) VALUES (?,?,?,?,?,?)",
+                            (username.strip(), full_name.strip(), password_hash, role, _now(), email.strip() or None))
         except sqlite3.IntegrityError as e:
             raise ValueError("That username is already taken.") from e
         return int(cur.lastrowid)
 
 
-def update_user(user_id: int, **fields) -> None:
-    allowed = {k: v for k, v in fields.items() if k in ("full_name", "role", "active", "password_hash", "last_login")}
-    if not allowed:
+def update_user(user_id: int, bump_session: bool = False, **fields) -> None:
+    """Change a user. bump_session=True signs them out everywhere (their old sign-in cookies stop working)."""
+    allowed = {k: v for k, v in fields.items() if k in (
+        "full_name", "role", "active", "password_hash", "last_login", "email", "totp_secret", "totp_last_step",
+        "recovery_codes")}
+    sets = [f"{k}=?" for k in allowed] + (["session_version=session_version+1"] if bump_session else [])
+    if not sets:
         return
     with db() as c:
-        c.execute(f"UPDATE users SET {', '.join(f'{k}=?' for k in allowed)} WHERE id=?", (*allowed.values(), user_id))
+        c.execute(f"UPDATE users SET {', '.join(sets)} WHERE id=?", (*allowed.values(), user_id))
 
 
 def active_admins() -> int:

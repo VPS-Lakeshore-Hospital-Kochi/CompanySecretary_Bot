@@ -2,3 +2,4 @@ anthropic>=1.8,<2
 flask>=3.0,<4
 python-docx>=1.1,<2
 pypdf>=4.0
+segno>=1.5,<2

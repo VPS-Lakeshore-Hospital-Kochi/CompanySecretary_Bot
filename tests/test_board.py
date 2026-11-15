@@ -1,6 +1,7 @@
 """Board meetings, the directors' portal and resolutions by circulation."""
 
 import io
+import time
 
 import pytest
 from pypdf import PdfReader, PdfWriter
@@ -30,12 +31,33 @@ def site():
         r = cs.post("/api/users", json={"username": u, "full_name": name, "password": "board-pass-1", "role": "director"})
         assert r.status_code == 200, r.get_json()
         ids[u] = r.get_json()["id"]
-    clients = {}
+    clients, secrets = {}, {}
     for u in ids:
         c = app_module.app.test_client()
-        assert c.post("/api/login", json={"username": u, "password": "board-pass-1"}).status_code == 200
+        r = c.post("/api/login", json={"username": u, "password": "board-pass-1"})
+        assert r.status_code == 200 and r.get_json()["must_enrol"] is True
+        secrets[u] = enrol(c)
         clients[u] = c
-    return {"cs": cs, "ids": ids, "d": clients}
+    return {"cs": cs, "ids": ids, "d": clients, "secrets": secrets}
+
+
+def enrol(c) -> str:
+    """Set up two-step sign-in for the signed-in client; returns the secret."""
+    from cs_assistant import twofactor
+    start = c.post("/api/two-step/start").get_json()
+    secret = start["secret"].replace(" ", "")
+    assert start["uri"].startswith("otpauth://totp/") and start["qr_svg"].startswith("<svg")
+    r = c.post("/api/two-step/confirm", json={"code": twofactor.code_now(secret)})
+    assert r.status_code == 200 and len(r.get_json()["recovery_codes"]) == 8
+    return secret
+
+
+def sign_in(c, username, secret, password="board-pass-1", ahead=1):
+    """Password, then a code. `ahead` uses a later 30-second step, as a code cannot be used twice."""
+    from cs_assistant import twofactor
+    r = c.post("/api/login", json={"username": username, "password": password})
+    assert r.get_json() == {"needs_code": True}
+    return c.post("/api/login/code", json={"code": twofactor.code_now(secret, time.time() + 30 * ahead)})
 
 
 def test_directors_cannot_reach_secretariat_tools(site):
@@ -127,7 +149,7 @@ def test_meeting_pack_rsvp_and_withheld_paper(site):
     assert d["ned"].get("/api/portal/home").status_code == 401
     cs.post(f"/api/users/{ids['ned']}", json={"active": True})
     assert d["ned"].get("/api/portal/home").status_code == 401  # the old session stays ended
-    assert d["ned"].post("/api/login", json={"username": "ned", "password": "board-pass-1"}).status_code == 200
+    assert sign_in(d["ned"], "ned", site["secrets"]["ned"]).status_code == 200
 
 
 def test_circular_resolution_majority_and_noting(site):

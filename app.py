@@ -21,6 +21,7 @@ from flask import (Flask, Response, abort, g, jsonify, request, send_file, send_
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from cs_assistant import calendar as cal
+from cs_assistant import twofactor
 from cs_assistant import board, documents, export, files, library, llm, records, registers, store
 from cs_assistant.knowledge import OFFICIAL_LINKS
 
@@ -74,9 +75,12 @@ if os.environ.get("ADMIN_USERNAME") and os.environ.get("ADMIN_PASSWORD") and not
     store.create_user(os.environ["ADMIN_USERNAME"], os.environ.get("ADMIN_NAME", os.environ["ADMIN_USERNAME"]),
                       generate_password_hash(os.environ["ADMIN_PASSWORD"]), "admin")
 
-OPEN_PATHS = {"/", "/api/me", "/api/login", "/api/setup", "/api/logout"}
+OPEN_PATHS = {"/", "/api/me", "/api/login", "/api/login/code", "/api/setup", "/api/logout"}
+# Someone who must set up two-step sign-in can do only that until it is done.
+ENROL_PATHS = {"/api/two-step/start", "/api/two-step/confirm"}
 # Directors sign in to the Board portal only: nothing of the Secretariat's tools is open to them.
-DIRECTOR_PATHS = {"/", "/api/me", "/api/logout", "/api/me/password"}
+DIRECTOR_PATHS = {"/", "/api/me", "/api/logout", "/api/me/password", "/api/two-step/start", "/api/two-step/confirm",
+                  "/api/two-step/off"}
 ROLES = ("admin", "member", "director")
 _failures: dict[str, list[float]] = {}
 _fail_lock = threading.Lock()
@@ -88,7 +92,8 @@ def _require_login():
     uid = session.get("uid")
     if uid:
         u = store.get_user(uid)
-        if u and u["active"]:
+        # A password change, a two-step reset or switching the person off ends every older sign-in.
+        if u and u["active"] and session.get("sv", 0) == u["session_version"]:
             g.user = u
         else:
             session.clear()
@@ -96,6 +101,10 @@ def _require_login():
         return None
     if not g.user:
         return jsonify({"error": "Please sign in.", "login": True}), 401
+    if _must_enrol():
+        if request.path in ENROL_PATHS:
+            return None
+        return jsonify({"error": "Please set up two-step sign-in first.", "enrol": True}), 403
     is_director = g.user["role"] == "director"
     if is_director and request.path not in DIRECTOR_PATHS and not request.path.startswith("/api/portal/"):
         return jsonify({"error": "This page is not part of the Board portal."}), 403
@@ -121,6 +130,32 @@ def _admin_only():
         abort(403)
 
 
+def _must_enrol() -> bool:
+    return bool(g.get("user")) and not g.user["two_step"] and twofactor.required_for(g.user["role"])
+
+
+def _start_session(u: dict, how: str) -> None:
+    session.clear()
+    session.permanent = True
+    session["uid"] = u["id"]
+    session["sv"] = u["session_version"]
+    store.update_user(u["id"], last_login=datetime.now().isoformat(timespec="seconds"))
+    store.log(u["username"], how)
+
+
+def _too_many(key: str) -> bool:
+    now = time.time()
+    with _fail_lock:
+        recent = [t for t in _failures.get(key, []) if now - t < 300]
+        _failures[key] = recent
+        return len(recent) >= 5
+
+
+def _failed(key: str) -> None:
+    with _fail_lock:
+        _failures.setdefault(key, []).append(time.time())
+
+
 def _password_ok(pw: str) -> str | None:
     if len(pw or "") < 8:
         return "The password must be at least 8 characters."
@@ -129,7 +164,9 @@ def _password_ok(pw: str) -> str | None:
 
 @app.get("/api/me")
 def me():
-    return jsonify({"user": g.user, "needs_setup": store.user_count() == 0})
+    user = {k: v for k, v in g.user.items() if k != "session_version"} if g.user else None
+    return jsonify({"user": user, "needs_setup": store.user_count() == 0, "must_enrol": _must_enrol(),
+                    "two_step_policy": twofactor.policy()})
 
 
 @app.post("/api/setup")
@@ -142,10 +179,7 @@ def setup():
     if err or not (b.get("username") or "").strip() or not (b.get("full_name") or "").strip():
         return jsonify({"error": err or "Please fill in every box."}), 400
     uid = store.create_user(b["username"], b["full_name"], generate_password_hash(b["password"]), "admin")
-    session.clear()
-    session.permanent = True
-    session["uid"] = uid
-    store.log(b["username"], "Set up the site", "First administrator created")
+    _start_session(store.get_user(uid), "Set up the site")
     return jsonify({"ok": True})
 
 
@@ -154,22 +188,93 @@ def login():
     b = request.get_json(force=True)
     username = (b.get("username") or "").strip()
     key = f"{username.lower()}|{request.remote_addr}"
-    now = time.time()
-    with _fail_lock:
-        recent = [t for t in _failures.get(key, []) if now - t < 300]
-        _failures[key] = recent
-        if len(recent) >= 5:
-            return jsonify({"error": "Too many wrong attempts. Please wait five minutes and try again."}), 429
+    if _too_many(key):
+        return jsonify({"error": "Too many wrong attempts. Please wait five minutes and try again."}), 429
     u = store.user_with_hash(username)
     if not u or not u["active"] or not check_password_hash(u["password_hash"], b.get("password") or ""):
-        with _fail_lock:
-            _failures.setdefault(key, []).append(now)
+        _failed(key)
         return jsonify({"error": "The username or password is not right."}), 401
-    session.clear()
-    session.permanent = True
-    session["uid"] = u["id"]
-    store.update_user(u["id"], last_login=datetime.now().isoformat(timespec="seconds"))
-    store.log(u["username"], "Signed in")
+    if u["totp_secret"]:
+        # Password right; the code from the authenticator app comes next.
+        session.clear()
+        session["pending_uid"] = u["id"]
+        session["pending_at"] = time.time()
+        return jsonify({"needs_code": True})
+    _start_session(u, "Signed in")
+    return jsonify({"ok": True, "must_enrol": twofactor.required_for(u["role"])})
+
+
+@app.post("/api/login/code")
+def login_code():
+    uid, at = session.get("pending_uid"), session.get("pending_at", 0)
+    if not uid or time.time() - at > 300:
+        session.clear()
+        return jsonify({"error": "Please sign in again with your username and password.", "login": True}), 401
+    u = store.get_user(uid)
+    full = store.user_with_hash(u["username"]) if u else None
+    if not full or not full["active"] or not full["totp_secret"]:
+        session.clear()
+        return jsonify({"error": "Please sign in again.", "login": True}), 401
+    key = f"code|{uid}"
+    if _too_many(key):
+        return jsonify({"error": "Too many wrong codes. Please wait five minutes and try again."}), 429
+    code = (request.get_json(force=True).get("code") or "").strip()
+    step = twofactor.verify(full["totp_secret"], code, full["totp_last_step"])
+    if step is not None:
+        store.update_user(uid, totp_last_step=step)
+        _start_session(store.get_user(uid), "Signed in (two-step)")
+        return jsonify({"ok": True})
+    remaining = twofactor.use_recovery_code(code, json.loads(full["recovery_codes"] or "[]"))
+    if remaining is not None:
+        store.update_user(uid, recovery_codes=json.dumps(remaining))
+        _start_session(store.get_user(uid), "Signed in with a recovery code")
+        return jsonify({"ok": True, "recovery_left": len(remaining)})
+    _failed(key)
+    return jsonify({"error": "That code is not right. Check the time on your phone and use the newest code."}), 401
+
+
+# ---------------------------------------------------------------- two-step sign-in (own account)
+@app.post("/api/two-step/start")
+def two_step_start():
+    """A new secret for the authenticator app. It is kept in the session until a code confirms it."""
+    secret = twofactor.new_secret()
+    session["totp_new"] = secret
+    issuer = (store.get_profile().get("brand") or "VPS Lakeshore") + " Board"
+    uri = twofactor.otpauth_uri(secret, g.user["username"], issuer)
+    return jsonify({"secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)), "uri": uri,
+                    "qr_svg": twofactor.qr_svg(uri)})
+
+
+@app.post("/api/two-step/confirm")
+def two_step_confirm():
+    secret = session.get("totp_new")
+    if not secret:
+        return jsonify({"error": "Please start again."}), 400
+    key = f"enrol|{g.user['id']}"
+    if _too_many(key):
+        return jsonify({"error": "Too many wrong codes. Please wait five minutes and try again."}), 429
+    step = twofactor.verify(secret, request.get_json(force=True).get("code", ""))
+    if step is None:
+        _failed(key)
+        return jsonify({"error": "That code is not right. Type the 6 digits the app shows now."}), 400
+    codes, hashes = twofactor.new_recovery_codes()
+    store.update_user(g.user["id"], totp_secret=secret, totp_last_step=step, recovery_codes=json.dumps(hashes),
+                      bump_session=True)
+    session.pop("totp_new", None)
+    session["sv"] = store.get_user(g.user["id"])["session_version"]  # keep this sign-in; end all others
+    store.log(_who(), "Turned on two-step sign-in")
+    return jsonify({"ok": True, "recovery_codes": codes})
+
+
+@app.post("/api/two-step/off")
+def two_step_off():
+    if twofactor.required_for(g.user["role"]):
+        return jsonify({"error": "Two-step sign-in is required for your account, so it cannot be turned off."}), 400
+    u = store.user_with_hash(g.user["username"])
+    if not check_password_hash(u["password_hash"], request.get_json(force=True).get("password") or ""):
+        return jsonify({"error": "Your password is not right."}), 400
+    store.update_user(u["id"], totp_secret=None, totp_last_step=None, recovery_codes=None)
+    store.log(_who(), "Turned off two-step sign-in")
     return jsonify({"ok": True})
 
 
@@ -188,9 +293,17 @@ def change_password():
     err = _password_ok(b.get("new", ""))
     if err:
         return jsonify({"error": err}), 400
-    store.update_user(u["id"], password_hash=generate_password_hash(b["new"]))
+    store.update_user(u["id"], password_hash=generate_password_hash(b["new"]), bump_session=True)
+    session["sv"] = store.get_user(u["id"])["session_version"]  # keep this sign-in; end all others
     store.log(_who(), "Changed own password")
     return jsonify({"ok": True})
+
+
+def _email_or_error(v: str) -> str:
+    v = str(v or "").strip()
+    if v and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v):
+        raise ValueError("That e-mail address does not look right.")
+    return v
 
 
 # ---------------------------------------------------------------- users (admin)
@@ -209,7 +322,8 @@ def users_create():
         return jsonify({"error": err or "Please fill in every box."}), 400
     role = b.get("role") if b.get("role") in ROLES else "member"
     try:
-        uid = store.create_user(b["username"], b["full_name"], generate_password_hash(b["password"]), role)
+        uid = store.create_user(b["username"], b["full_name"], generate_password_hash(b["password"]), role,
+                                _email_or_error(b.get("email", "")))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     store.log(_who(), "Added user", f"{b['username']} ({role})")
@@ -230,6 +344,13 @@ def users_update(uid: int):
         fields["role"] = b["role"] if b["role"] in ROLES else "member"
     if "active" in b:
         fields["active"] = 1 if b["active"] else 0
+    if "email" in b:
+        try:
+            fields["email"] = _email_or_error(b["email"]) or None
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+    if b.get("reset_two_step"):
+        fields.update(totp_secret=None, totp_last_step=None, recovery_codes=None)
     if b.get("password"):
         err = _password_ok(b["password"])
         if err:
@@ -239,8 +360,13 @@ def users_update(uid: int):
         fields.get("role", "admin") != "admin" or fields.get("active") == 0)
     if losing_admin and store.active_admins() <= 1:
         return jsonify({"error": "There must always be at least one active administrator."}), 400
-    store.update_user(uid, **fields)
-    what = ", ".join(k.replace("password_hash", "password reset") for k in fields)
+    # Resetting the password or two-step, or switching someone off, signs them out everywhere.
+    bump = bool({"password_hash", "totp_secret"} & set(fields)) or fields.get("active") == 0
+    store.update_user(uid, bump_session=bump, **fields)
+    if uid == g.user["id"] and bump and fields.get("active") != 0:
+        session["sv"] = store.get_user(uid)["session_version"]
+    what = ", ".join({"password_hash": "password reset", "totp_secret": "two-step reset"}.get(k, k)
+                     for k in fields if k not in ("totp_last_step", "recovery_codes"))
     store.log(_who(), "Changed user", f"{target['username']}: {what}")
     return jsonify({"ok": True})
 

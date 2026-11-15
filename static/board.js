@@ -397,7 +397,9 @@ screens.portal = async () => {
     <div class="step"><div class="inline"><div><label class="field">Current password</label><input type="password" id="pw-cur" autocomplete="current-password"></div>
       <div><label class="field">New password (8 or more characters)</label><input type="password" id="pw-new" autocomplete="new-password"></div>
       <div><button class="btn light" id="pw-save">Change my password</button></div></div>
-      <p class="meta">Trouble signing in or opening a paper? Contact the Company Secretary${PORTAL.company.cs_name ? `, ${esc(PORTAL.company.cs_name)}` : ""}.</p></div>`;
+      <p class="meta">Trouble signing in or opening a paper? Contact the Company Secretary${PORTAL.company.cs_name ? `, ${esc(PORTAL.company.cs_name)}` : ""}.</p></div>
+    ${twoStepHtml()}`;
+  wireTwoStep("portal");
   document.getElementById("pw-save").onclick = async () => {
     try {
       await api("/api/me/password", { method: "POST", body: JSON.stringify({ current: document.getElementById("pw-cur").value, new: document.getElementById("pw-new").value }) });

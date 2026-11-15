@@ -1160,6 +1160,7 @@ screens.settings = () => {
       <div class="inline"><div><label class="field">Current password</label><input type="password" id="pw-cur" autocomplete="current-password"></div>
         <div><label class="field">New password (8 or more characters)</label><input type="password" id="pw-new" autocomplete="new-password"></div>
         <div><button class="btn light" id="pw-save">Change my password</button></div></div></div>
+    ${twoStepHtml()}
     ${admin ? `<h2>People who can use this site</h2><div class="step" id="users">Loading...</div>
       <h2>Recent activity</h2><div class="step"><p class="meta" style="margin-top:0">Who added, changed or removed documents, marked filings and changed settings.</p><div id="activity">Loading...</div></div>
       <h2>Backup</h2><div class="step"><p style="margin-top:0">Download one file containing the database and every library document. IT should also back up the <code>data</code> folder every night.</p>
@@ -1183,6 +1184,7 @@ screens.settings = () => {
       flash("Your password has been changed.");
     } catch (e) { flash(e.message); }
   };
+  wireTwoStep("settings");
   if (admin) { drawUsers(); drawActivity(); }
   if (!admin) return;
   document.getElementById("p-save").onclick = async () => {
@@ -1218,9 +1220,9 @@ screens.help = () => {
 async function drawUsers() {
   const box = document.getElementById("users");
   const users = await api("/api/users");
-  box.innerHTML = `<div class="md"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last signed in</th><th></th></tr></thead><tbody>
+  box.innerHTML = `<div class="md"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Two-step</th><th>Last signed in</th><th></th></tr></thead><tbody>
     ${users.map(u => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.username)}</td><td>${{ admin: "Administrator", member: "Member", director: "Director (Board portal only)" }[u.role] || esc(u.role)}</td>
-      <td>${u.active ? "Active" : "Switched off"}</td><td>${u.last_login ? fmtDate(u.last_login.slice(0, 10)) : "-"}</td>
+      <td>${u.active ? "Active" : "Switched off"}</td><td>${u.two_step ? "On" : "-"}</td><td>${u.last_login ? fmtDate(u.last_login.slice(0, 10)) : "-"}</td>
       <td><button class="btn light" data-u="${u.id}">Change</button></td></tr>`).join("")}</tbody></table></div>
     <div class="btn-row"><button class="btn" id="u-add">+ Add a person</button></div>
     <p class="meta">Members can use everything except user management, backup and company details. Directors see only the Board portal: the meetings and resolutions sent to them. Switch a person off when they leave (or a director's term ends); they are signed out at once and their name stays in the activity log.</p>`;
@@ -1229,14 +1231,19 @@ async function drawUsers() {
     d.innerHTML = `<h2 style="margin-top:0">${u ? "Change " + esc(u.full_name) : "Add a person"}</h2>
       <label class="field">Full name</label><input type="text" id="nu-name" value="${esc(u ? u.full_name : "")}">
       ${u ? "" : `<label class="field">Username (used to sign in)</label><input type="text" id="nu-user" placeholder="e.g. anita.menon">`}
+      <label class="field">E-mail (for Board meeting notices and reminders)</label><input type="email" id="nu-email" value="${esc(u ? u.email || "" : "")}" placeholder="name@example.com">
       <label class="field">${u ? "New password (leave empty to keep the current one)" : "Password (8 or more characters)"}</label><input type="password" id="nu-pw" autocomplete="new-password">
       <label class="field">Role</label><select id="nu-role"><option value="member">Member (CS team)</option><option value="admin" ${u && u.role === "admin" ? "selected" : ""}>Administrator (CS team)</option><option value="director" ${u && u.role === "director" ? "selected" : ""}>Director (Board portal only)</option></select>
       ${u ? `<label class="choice" style="margin-top:0.8rem"><input type="checkbox" id="nu-active" ${u.active ? "checked" : ""}><span>Allowed to sign in</span></label>` : ""}
+      ${u && u.two_step ? `<label class="choice" style="margin-top:0.5rem"><input type="checkbox" id="nu-reset2"><span>Reset two-step sign-in (lost or new phone). They set it up again at their next sign-in.</span></label>` : ""}
       <div class="btn-row"><button class="btn" id="nu-save">Save</button><button class="btn light" id="nu-cancel">Cancel</button></div>`;
     d.showModal();
     d.querySelector("#nu-cancel").onclick = () => d.close();
     d.querySelector("#nu-save").onclick = async () => {
-      const body = { full_name: d.querySelector("#nu-name").value, role: d.querySelector("#nu-role").value, password: d.querySelector("#nu-pw").value };
+      const body = { full_name: d.querySelector("#nu-name").value, role: d.querySelector("#nu-role").value, password: d.querySelector("#nu-pw").value,
+        email: d.querySelector("#nu-email").value };
+      const r2 = d.querySelector("#nu-reset2");
+      if (r2 && r2.checked) body.reset_two_step = true;
       try {
         if (u) { body.active = d.querySelector("#nu-active").checked; await api(`/api/users/${u.id}`, { method: "POST", body: JSON.stringify(body) }); }
         else { body.username = d.querySelector("#nu-user").value; await api("/api/users", { method: "POST", body: JSON.stringify(body) }); }
@@ -1268,7 +1275,8 @@ function showSignIn() {
     <p class="meta">Forgotten your password? Ask the administrator to set a new one.</p></div>`;
   const go_ = async () => {
     try {
-      await api("/api/login", { method: "POST", body: JSON.stringify({ username: document.getElementById("si-user").value, password: document.getElementById("si-pw").value }) });
+      const r = await api("/api/login", { method: "POST", body: JSON.stringify({ username: document.getElementById("si-user").value, password: document.getElementById("si-pw").value }) });
+      if (r.needs_code) return showCode();
       start();
     } catch (e) { document.getElementById("si-msg").innerHTML = `<div class="banner error">${esc(e.message)}</div>`; }
   };
@@ -1276,6 +1284,98 @@ function showSignIn() {
   document.getElementById("si-pw").onkeydown = e => { if (e.key === "Enter") go_(); };
   document.getElementById("si-user").focus();
 }
+/* Second step: the 6-digit code from the authenticator app, or a recovery code. */
+function showCode() {
+  app.innerHTML = `<div class="signin step">
+    <div class="label">Two-step sign-in</div>
+    <h1>Enter the code</h1>
+    <p class="lead">Open the authenticator app on your phone and type the 6-digit code it shows for this site.</p>
+    <label class="field" for="tc-code">Code</label>
+    <input type="text" id="tc-code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" style="font-size:1.6rem;letter-spacing:0.3em;max-width:260px">
+    <div id="tc-msg"></div>
+    <div class="btn-row"><button class="btn big" id="tc-go">Sign in</button><button class="btn light" id="tc-back">Start again</button></div>
+    <p class="meta">Lost your phone? Type one of your recovery codes (like <code>abcd-efgh</code>) in the same box, or ask the administrator to reset two-step sign-in.</p></div>`;
+  const send = async () => {
+    try {
+      const r = await api("/api/login/code", { method: "POST", body: JSON.stringify({ code: document.getElementById("tc-code").value }) });
+      if (r.recovery_left !== undefined) flash(`You used a recovery code. ${r.recovery_left} left. If your phone is lost, ask the administrator to reset two-step sign-in so you can set it up on a new phone.`);
+      start();
+    } catch (e) { document.getElementById("tc-msg").innerHTML = `<div class="banner error">${esc(e.message)}</div>`; }
+  };
+  document.getElementById("tc-go").onclick = send;
+  document.getElementById("tc-back").onclick = showSignIn;
+  document.getElementById("tc-code").onkeydown = e => { if (e.key === "Enter") send(); };
+  document.getElementById("tc-code").focus();
+}
+
+/* Set up two-step sign-in: scan the QR code, confirm one code, keep the recovery codes. */
+async function showEnrol(required, after) {
+  document.body.classList.add("signed-out");
+  let s;
+  try { s = await api("/api/two-step/start", { method: "POST" }); } catch (e) { return flash(e.message); }
+  app.innerHTML = `<div class="signin step" style="max-width:680px">
+    <div class="label">Two-step sign-in</div>
+    <h1>${required ? "One more step to protect the Board papers" : "Turn on two-step sign-in"}</h1>
+    <p class="lead">${required ? "Your account needs a code from your phone as well as your password. This takes two minutes, once." : "After your password, you will also type a code from your phone."}</p>
+    <ol>
+      <li>Install an authenticator app on your phone if you do not have one: <strong>Google Authenticator</strong> or <strong>Microsoft Authenticator</strong> (free).</li>
+      <li>In the app, choose <strong>Add</strong> / <strong>+</strong>, then <strong>Scan a QR code</strong>, and point the phone at this picture:
+        <div style="margin:0.8rem 0;background:#fff;width:fit-content;padding:8px;border:1px solid var(--rule)">${s.qr_svg}</div>
+        <div class="meta">Using this phone? <a href="${esc(s.uri)}">Tap here to open the authenticator app</a>. Or type this key into the app: <code>${esc(s.secret)}</code></div></li>
+      <li>Type the 6-digit code the app now shows:</li>
+    </ol>
+    <input type="text" id="en-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" style="font-size:1.6rem;letter-spacing:0.3em;max-width:260px">
+    <div id="en-msg"></div>
+    <div class="btn-row"><button class="btn big" id="en-go">Confirm</button>
+      ${required ? `<button class="btn light" onclick="signOut()">Sign out</button>` : `<button class="btn light" id="en-cancel">Cancel</button>`}</div></div>`;
+  const cancel = document.getElementById("en-cancel");
+  if (cancel) cancel.onclick = () => { document.body.classList.remove("signed-out"); after(); };
+  const send = async () => {
+    try {
+      const r = await api("/api/two-step/confirm", { method: "POST", body: JSON.stringify({ code: document.getElementById("en-code").value }) });
+      app.innerHTML = `<div class="signin step" style="max-width:680px">
+        <div class="label">Two-step sign-in is on</div>
+        <h1>Keep these recovery codes safe</h1>
+        <p class="lead">If you lose your phone, each code below lets you sign in once. Print them or write them down and keep them somewhere safe, not on the phone. They will not be shown again.</p>
+        <div class="step" style="font-family:monospace;font-size:1.2rem;columns:2">${r.recovery_codes.map(c => `<div>${esc(c)}</div>`).join("")}</div>
+        <div class="btn-row"><button class="btn light" onclick="window.print()">Print</button><button class="btn big" id="en-done">I have kept them safe - continue</button></div></div>`;
+      document.getElementById("en-done").onclick = () => { document.body.classList.remove("signed-out"); after(); };
+    } catch (e) { document.getElementById("en-msg").innerHTML = `<div class="banner error">${esc(e.message)}</div>`; }
+  };
+  document.getElementById("en-go").onclick = send;
+  document.getElementById("en-code").onkeydown = e => { if (e.key === "Enter") send(); };
+  document.getElementById("en-code").focus();
+}
+
+/* The two-step part of "My account", for both the Secretariat's Settings and the directors' portal. */
+function twoStepHtml() {
+  const on = ME.two_step, required = ME.two_step_required;
+  return `<div class="step"><div class="label">Two-step sign-in</div>
+    <p style="margin-top:0.3rem">${on ? "&#10003; <strong>On.</strong> You sign in with your password and a code from your phone." : "<strong>Off.</strong> Turning it on means a stolen password alone cannot open your account."}</p>
+    <div class="btn-row">${on ? (required ? `<span class="meta">Required for your account.</span>` : `<button class="btn light" id="ts-off">Turn off</button>`)
+      : `<button class="btn" id="ts-on">Turn on two-step sign-in</button>`}
+      ${on ? `<button class="btn light" id="ts-new">Move to a new phone</button>` : ""}</div></div>`;
+}
+function wireTwoStep(back) {
+  const on = document.getElementById("ts-on"), off = document.getElementById("ts-off"), mv = document.getElementById("ts-new");
+  if (on) on.onclick = () => showEnrol(false, async () => { await refreshMe(); go(back); route(); });
+  if (mv) mv.onclick = () => showEnrol(false, async () => { await refreshMe(); go(back); route(); });
+  if (off) off.onclick = () => {
+    const d = document.getElementById("dlg");
+    d.innerHTML = `<h2 style="margin-top:0">Turn off two-step sign-in</h2><label class="field">Your password</label><input type="password" id="ts-pw">
+      <div class="btn-row"><button class="btn danger" id="ts-yes">Turn off</button><button class="btn light" onclick="this.closest('dialog').close()">Cancel</button></div>`;
+    d.showModal();
+    d.querySelector("#ts-yes").onclick = async () => {
+      try { await api("/api/two-step/off", { method: "POST", body: JSON.stringify({ password: d.querySelector("#ts-pw").value }) }); d.close(); await refreshMe(); route(); }
+      catch (e) { flash(e.message); }
+    };
+  };
+}
+async function refreshMe() {
+  const me = await api("/api/me");
+  ME = { ...me.user, two_step_required: me.two_step_policy === "all" || (me.two_step_policy === "directors" && me.user.role === "director") };
+}
+
 function showSetup() {
   document.body.classList.add("signed-out");
   app.innerHTML = `<div class="signin step">
@@ -1322,7 +1422,8 @@ async function start() {
   try { me = await api("/api/me"); } catch (e) { app.innerHTML = `<div class="banner error">Cannot reach the CS Assistant server. Is it running?</div>`; return; }
   if (me.needs_setup) return showSetup();
   if (!me.user) return showSignIn();
-  ME = me.user;
+  ME = { ...me.user, two_step_required: me.two_step_policy === "all" || (me.two_step_policy === "directors" && me.user.role === "director") };
+  if (me.must_enrol) return showEnrol(true, start);
   document.body.classList.remove("signed-out");
   document.body.classList.toggle("director", ME.role === "director");
   const who = document.getElementById("who");
