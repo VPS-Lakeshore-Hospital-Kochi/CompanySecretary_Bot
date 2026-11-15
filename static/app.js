@@ -1404,7 +1404,7 @@ async function signOut() {
 }
 
 function go(name) { if (location.hash === "#" + name) route(); else location.hash = name; }
-const PORTAL_SCREENS = ["portal", "pmeeting", "pcircular"];
+const PORTAL_SCREENS = ["portal", "pmeeting", "pcircular", "pview"];
 function route() {
   if (!ME) return;
   const [name, param] = (location.hash || "#home").slice(1).split("/");

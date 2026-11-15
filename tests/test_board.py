@@ -350,3 +350,39 @@ def test_minutes_workflow(site, monkeypatch):
     assert d["ned"].get(f"/api/portal/meetings/{mid}/minutes/file?which=signed").status_code == 200
     assert d["ned"].get(f"/api/portal/meetings/{mid}/minutes/file?which=draft").status_code == 404
     assert d["ned"].post(f"/api/portal/meetings/{mid}/minutes/comment", json={"kind": "no_comments"}).status_code == 400
+
+
+def test_private_highlights(site):
+    cs, ids, d = site["cs"], site["ids"], site["d"]
+    mid = cs.post("/api/board/meetings", json={"title": "147th Board Meeting", "meeting_date": "2027-04-10",
+                                               "invitees": list(ids.values())}).get_json()["id"]
+    iid = cs.post(f"/api/board/meetings/{mid}/items", data={"title": "Capex plan", "paper": (io.BytesIO(_pdf(3)), "capex.pdf")},
+                  content_type="multipart/form-data").get_json()["id"]
+    assert d["chair"].get(f"/api/portal/items/{iid}").status_code == 404  # not published
+    cs.post(f"/api/board/meetings/{mid}/status", json={"status": "published"})
+
+    info = d["chair"].get(f"/api/portal/items/{iid}").get_json()
+    assert info["item"]["paper_mime"] == "application/pdf" and info["marks"] == []
+    bad = {"page": 1, "x": 0.9, "y": 0.1, "w": 0.5, "h": 0.1}
+    assert d["chair"].post(f"/api/portal/items/{iid}/marks", json=bad).status_code == 400  # runs off the page
+    r = d["chair"].post(f"/api/portal/items/{iid}/marks", json={"page": 2, "x": 0.1, "y": 0.2, "w": 0.5, "h": 0.05,
+                                                                 "colour": "navy", "text": "Why the jump in MRI capex?"})
+    mark = r.get_json()["id"]
+    marks = d["chair"].get(f"/api/portal/items/{iid}").get_json()["marks"]
+    assert len(marks) == 1 and marks[0]["current"] and marks[0]["colour"] == "navy"
+
+    # Private: another director sees none and cannot change or delete it.
+    assert d["idir"].get(f"/api/portal/items/{iid}").get_json()["marks"] == []
+    assert d["idir"].post(f"/api/portal/marks/{mark}", json={"text": "hijack"}).status_code == 404
+    assert d["idir"].delete(f"/api/portal/marks/{mark}").status_code == 404
+    assert d["chair"].post(f"/api/portal/marks/{mark}", json={"text": "Ask the CFO"}).status_code == 200
+    assert d["chair"].get(f"/api/portal/items/{iid}").get_json()["marks"][0]["text"] == "Ask the CFO"
+
+    # After the paper is replaced, old highlights are kept but marked as being on the earlier version.
+    cs.post(f"/api/board/meetings/{mid}/items/{iid}", data={"title": "Capex plan", "paper": (io.BytesIO(_pdf(2)), "capex-v2.pdf")},
+            content_type="multipart/form-data")
+    marks = d["chair"].get(f"/api/portal/items/{iid}").get_json()["marks"]
+    assert marks[0]["current"] is False
+    assert d["chair"].delete(f"/api/portal/marks/{mark}").status_code == 200
+    # The Secretariat does not see directors' highlights at all.
+    assert cs.get(f"/api/portal/items/{iid}").status_code == 403

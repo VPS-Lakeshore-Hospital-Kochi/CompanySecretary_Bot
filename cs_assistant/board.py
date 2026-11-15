@@ -131,6 +131,12 @@ CREATE TABLE IF NOT EXISTS board_minute_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
     version INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT, at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS board_marks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER NOT NULL, user_id INTEGER NOT NULL, paper_version TEXT,
+    page INTEGER NOT NULL, x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,
+    colour TEXT NOT NULL DEFAULT 'magenta', text TEXT, created TEXT NOT NULL, updated TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS board_marks_item_user ON board_marks (item_id, user_id);
 CREATE TABLE IF NOT EXISTS board_emails (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, kind TEXT NOT NULL, ref_type TEXT NOT NULL,
     ref_id INTEGER NOT NULL, user_id INTEGER, address TEXT, subject TEXT, error TEXT, sent_by TEXT
@@ -326,6 +332,7 @@ def delete_meeting(meeting_id: int) -> None:
         c.execute("DELETE FROM board_rsvps WHERE meeting_id=?", (meeting_id,))
         c.executemany("DELETE FROM board_views WHERE item_id=?", [(i,) for i in ids])
         c.executemany("DELETE FROM board_notes WHERE item_id=?", [(i,) for i in ids])
+        c.executemany("DELETE FROM board_marks WHERE item_id=?", [(i,) for i in ids])
         c.execute("DELETE FROM board_meetings WHERE id=?", (meeting_id,))
 
 
@@ -333,7 +340,9 @@ def compliance(m: dict, all_meetings: list[dict] | None = None) -> list[dict]:
     """SS-1 / Sec. 173 checks for one meeting: [{level: ok|warn|error, text}]."""
     out = []
     md = date.fromisoformat(m["meeting_date"])
-    if m.get("notice_sent_on"):
+    if m.get("notice_sent_on") and m["notice_sent_on"] > m["meeting_date"]:
+        out.append({"level": "error", "text": "The notice date is after the meeting date. Please check it."})
+    elif m.get("notice_sent_on"):
         gap = (md - date.fromisoformat(m["notice_sent_on"])).days
         out.append({"level": "ok" if gap >= 7 else "warn",
                     "text": f"Notice sent {gap} day{'s' if gap != 1 else ''} before the meeting"
@@ -341,7 +350,9 @@ def compliance(m: dict, all_meetings: list[dict] | None = None) -> list[dict]:
                                "and make sure at least one independent director attends (or ratifies).")})
     elif m["status"] != "cancelled":
         out.append({"level": "warn", "text": "Enter the date the notice was sent (at least 7 days before the meeting)."})
-    if m.get("published_at"):
+    if m.get("published_at") and (md - date.fromisoformat(m["published_at"][:10])).days < 0:
+        out.append({"level": "warn", "text": "Papers were published after the meeting date."})
+    elif m.get("published_at"):
         gap = (md - date.fromisoformat(m["published_at"][:10])).days
         out.append({"level": "ok" if gap >= 7 else "warn",
                     "text": f"Papers published {gap} day{'s' if gap != 1 else ''} before the meeting"
@@ -453,6 +464,7 @@ def delete_item(meeting_id: int, item_id: int) -> None:
         c.execute("DELETE FROM board_items WHERE id=? AND meeting_id=?", (item_id, meeting_id))
         c.execute("DELETE FROM board_views WHERE item_id=?", (item_id,))
         c.execute("DELETE FROM board_notes WHERE item_id=?", (item_id,))
+        c.execute("DELETE FROM board_marks WHERE item_id=?", (item_id,))
         rest = [r["id"] for r in c.execute("SELECT id FROM board_items WHERE meeting_id=? ORDER BY seq, id", (meeting_id,))]
         c.executemany("UPDATE board_items SET seq=? WHERE id=?", [(n + 1, i) for n, i in enumerate(rest)])
 
@@ -509,6 +521,61 @@ def notes_for(meeting_id: int, user_id: int) -> dict[int, str]:
         return {r["item_id"]: r["text"] for r in c.execute(
             "SELECT n.item_id, n.text FROM board_notes n JOIN board_items i ON i.id=n.item_id WHERE i.meeting_id=? AND n.user_id=?",
             (meeting_id, user_id))}
+
+
+# Private mark-up on a paper: boxes drawn on a page (as fractions of the page) with an optional comment.
+MARK_COLOURS = ("magenta", "navy")
+
+
+def _mark_values(data: dict) -> dict:
+    try:
+        page = int(data.get("page"))
+        x, y, w, h = (float(data.get(k)) for k in ("x", "y", "w", "h"))
+    except (TypeError, ValueError):
+        raise BoardError("The highlight is not valid.") from None
+    if page < 1 or page > 5000 or not all(0 <= v <= 1 for v in (x, y, w, h)) or w <= 0 or h <= 0 or x + w > 1.0001 or y + h > 1.0001:
+        raise BoardError("The highlight is not valid.")
+    colour = data.get("colour") if data.get("colour") in MARK_COLOURS else MARK_COLOURS[0]
+    return {"page": page, "x": x, "y": y, "w": w, "h": h, "colour": colour, "text": _text(data.get("text"), 4000)}
+
+
+def marks_for(item_id: int, user_id: int) -> list[dict]:
+    it = get_item(item_id)
+    current = it["paper_updated"] if it else None
+    with store.db() as c:
+        rows = c.execute("SELECT * FROM board_marks WHERE item_id=? AND user_id=? ORDER BY page, y, x", (item_id, user_id)).fetchall()
+    return [dict(r) | {"current": r["paper_version"] == current} for r in rows]
+
+
+def add_mark(item_id: int, user_id: int, data: dict) -> int:
+    it = get_item(item_id)
+    if not it or not it.get("paper_stored"):
+        raise BoardError("This item has no paper to mark up.")
+    v = _mark_values(data)
+    with store.db() as c:
+        if c.execute("SELECT COUNT(*) FROM board_marks WHERE item_id=? AND user_id=?", (item_id, user_id)).fetchone()[0] >= 500:
+            raise BoardError("You have made 500 highlights on this paper, which is the most allowed.")
+        cur = c.execute("INSERT INTO board_marks (item_id, user_id, paper_version, page, x, y, w, h, colour, text, created, updated) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (item_id, user_id, it["paper_updated"], v["page"], v["x"], v["y"], v["w"], v["h"], v["colour"], v["text"],
+                         _now(), _now()))
+        return int(cur.lastrowid)
+
+
+def update_mark(mark_id: int, user_id: int, data: dict) -> dict | None:
+    with store.db() as c:
+        r = c.execute("SELECT * FROM board_marks WHERE id=? AND user_id=?", (mark_id, user_id)).fetchone()
+        if not r:
+            return None
+        colour = data.get("colour") if data.get("colour") in MARK_COLOURS else r["colour"]
+        text = _text(data.get("text"), 4000) if "text" in data else r["text"]
+        c.execute("UPDATE board_marks SET colour=?, text=?, updated=? WHERE id=?", (colour, text, _now(), mark_id))
+        return dict(r)
+
+
+def delete_mark(mark_id: int, user_id: int) -> bool:
+    with store.db() as c:
+        return c.execute("DELETE FROM board_marks WHERE id=? AND user_id=?", (mark_id, user_id)).rowcount > 0
 
 
 def set_rsvp(meeting_id: int, user_id: int, response: str, note: str = "") -> None:

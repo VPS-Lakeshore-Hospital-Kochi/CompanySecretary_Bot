@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -43,6 +44,7 @@ llm.MODEL = os.environ.get("CS_MODEL", llm.MODEL)
 llm.WEB_SEARCH = os.environ.get("CS_WEB_SEARCH", "1") != "0"
 llm.USE_FALLBACKS = os.environ.get("CS_FALLBACKS", "1") != "0"
 
+mimetypes.add_type("text/javascript", ".mjs")  # pdf.js is an ES module; older Pythons do not know .mjs
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 120 * 1024 * 1024
 store.init()
@@ -1240,6 +1242,43 @@ def portal_paper(iid: int):
 def portal_note(iid: int):
     _portal_item_or_404(iid)
     board.save_note(iid, _uid(), request.get_json(force=True).get("text", ""))
+    return jsonify({"ok": True})
+
+
+@app.get("/api/portal/items/<int:iid>")
+def portal_item(iid: int):
+    """One agenda item for the paper viewer, with the director's own highlights."""
+    it = _portal_item_or_404(iid)
+    m = board.get_meeting(it["meeting_id"])
+    return jsonify({"item": {k: it[k] for k in ("id", "meeting_id", "title", "kind", "paper_name", "paper_mime", "paper_size")}
+                    | {"revised": board.is_revised(it, m)},
+                    "meeting": {k: m[k] for k in ("id", "title", "meeting_date")},
+                    "marks": board.marks_for(iid, _uid())})
+
+
+@app.post("/api/portal/items/<int:iid>/marks")
+def portal_mark_add(iid: int):
+    _portal_item_or_404(iid)
+    try:
+        mark_id = board.add_mark(iid, _uid(), request.get_json(force=True))
+    except board.BoardError as e:
+        return _board_error(e)
+    return jsonify({"id": mark_id})
+
+
+@app.post("/api/portal/marks/<int:mark_id>")
+def portal_mark_update(mark_id: int):
+    r = board.update_mark(mark_id, _uid(), request.get_json(force=True))
+    if not r:
+        abort(404)
+    _portal_item_or_404(r["item_id"])
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/portal/marks/<int:mark_id>")
+def portal_mark_delete(mark_id: int):
+    if not board.delete_mark(mark_id, _uid()):
+        abort(404)
     return jsonify({"ok": True})
 
 

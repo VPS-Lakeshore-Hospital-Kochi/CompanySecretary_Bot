@@ -546,7 +546,8 @@ screens.pmeeting = async (id) => {
         ${it.summary ? `<div class="md" style="font-size:0.95rem">${md(it.summary)}</div>` : ""}
         ${it.resolution ? `<details><summary>Draft resolution</summary><div class="md">${md(it.resolution)}</div></details>` : ""}</div>
       <div class="due">${it.revised ? `<span class="pill overdue">Revised</span>` : it.paper_name ? (it.read ? `<span class="pill later">Opened</span>` : `<span class="pill soon">Not opened</span>`) : ""}</div>
-      <div class="actions">${it.paper_name ? `<a class="btn" href="/api/portal/items/${it.id}/paper" target="_blank" rel="noopener" data-open="${it.id}">Open the paper</a>
+      <div class="actions">${it.paper_name ? `${it.paper_mime === "application/pdf" ? `<a class="btn" href="#pview/${it.id}">Read and highlight</a>` : ""}
+        <a class="btn ${it.paper_mime === "application/pdf" ? "light" : ""}" href="/api/portal/items/${it.id}/paper" target="_blank" rel="noopener" data-open="${it.id}">${it.paper_mime === "application/pdf" ? "Open in a new tab" : "Open the paper"}</a>
         <span class="meta" style="align-self:center">${esc(it.paper_name)}${fileSizeText(it.paper_size)}</span>` : ""}</div>
       <details ${it.note ? "open" : ""}><summary>My private notes${it.note ? "" : " (only you can see them)"}</summary>
         <textarea data-note="${it.id}" placeholder="Questions to ask, points to raise...">${esc(it.note)}</textarea>
@@ -639,4 +640,199 @@ screens.pcircular = async (id) => {
       PORTAL = null; screens.pcircular(id);
     } catch (e) { flash(e.message); }
   };
+};
+
+/* ----------------------------------------------------------- the paper viewer
+ * Renders a PDF paper page by page with pdf.js (kept in static/vendor/pdfjs) and lets the director
+ * draw highlight boxes with comments. Highlights are private to the director and stored as fractions
+ * of the page, so they stay in place at any zoom.
+ */
+let PDFJS = null;
+async function loadPdfJs() {
+  if (!PDFJS) {
+    PDFJS = await import("/static/vendor/pdfjs/pdf.min.mjs");
+    PDFJS.GlobalWorkerOptions.workerSrc = "/static/vendor/pdfjs/pdf.worker.min.mjs";
+  }
+  return PDFJS;
+}
+const MARK_FILL = { magenta: "rgba(181, 23, 90, 0.22)", navy: "rgba(0, 30, 95, 0.18)" };
+const MARK_EDGE = { magenta: "#B5175A", navy: "#001E5F" };
+
+screens.pview = async (id) => {
+  app.innerHTML = `<p class="lead">Opening the paper...</p>`;
+  let info;
+  try { info = await api(`/api/portal/items/${id}`); }
+  catch (e) { app.innerHTML = `<button class="btn light back" onclick="go('portal')">&larr; Back</button><div class="banner error">This paper is not available to you.</div>`; return; }
+  const it = info.item, paperUrl = `/api/portal/items/${it.id}/paper`;
+  if (it.paper_mime !== "application/pdf") { location.href = paperUrl + "?download=1"; go(`pmeeting/${info.meeting.id}`); return; }
+  let marks = info.marks, scale = Math.min(1.6, Math.max(0.6, (Math.min(window.innerWidth, 1100) - 60) / 612)), drawing = false;
+
+  app.innerHTML = `<div class="viewer-bar no-print">
+      <button class="btn light" id="pv-back">&larr; Back to the agenda</button>
+      <div class="viewer-title"><div class="kicker">${esc(info.meeting.title)}</div><strong>${esc(it.title)}</strong>${it.revised ? ` <span class="pill overdue">Revised</span>` : ""}</div>
+      <div class="viewer-tools">
+        <button class="btn light" id="pv-out" title="Smaller" aria-label="Zoom out">&minus;</button>
+        <button class="btn light" id="pv-in" title="Bigger" aria-label="Zoom in">+</button>
+        <button class="btn" id="pv-mark" aria-pressed="false">Highlight</button>
+        <button class="btn light" id="pv-list">My highlights (<span id="pv-count">0</span>)</button>
+        <a class="btn light" href="${paperUrl}?download=1">Download</a>
+      </div></div>
+    <p class="meta no-print" id="pv-help">Press <strong>Highlight</strong>, then drag across the part of the page you want to mark. You can add a comment. Only you can see your highlights.</p>
+    <div class="viewer-wrap"><div id="pv-pages" class="viewer-pages"><p class="lead">Loading pages...</p></div>
+      <aside id="pv-side" class="viewer-side" hidden></aside></div>`;
+  document.getElementById("pv-back").onclick = () => go(`pmeeting/${info.meeting.id}`);
+
+  let pdf;
+  try {
+    const lib = await loadPdfJs();
+    pdf = await lib.getDocument({ url: paperUrl, withCredentials: true, isEvalSupported: false }).promise;
+  } catch (e) {
+    document.getElementById("pv-pages").innerHTML = `<div class="banner error">This PDF could not be shown here. <a href="${paperUrl}" target="_blank" rel="noopener">Open it in a new tab</a> instead.</div>`;
+    return;
+  }
+  const pagesBox = document.getElementById("pv-pages");
+  const pageEls = [];
+  const rendered = new Map();   // page number -> scale it was drawn at
+
+  async function renderPage(n) {
+    const holder = pageEls[n - 1];
+    if (rendered.get(n) === scale) return;
+    rendered.set(n, scale);
+    const page = await pdf.getPage(n);
+    const vp = page.getViewport({ scale });
+    const ratio = window.devicePixelRatio || 1;
+    const canvas = holder.querySelector("canvas");
+    canvas.width = Math.floor(vp.width * ratio); canvas.height = Math.floor(vp.height * ratio);
+    canvas.style.width = vp.width + "px"; canvas.style.height = vp.height + "px";
+    holder.style.width = vp.width + "px"; holder.style.height = vp.height + "px";
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null }).promise;
+  }
+  async function layout() {
+    const first = await pdf.getPage(1);
+    const base = first.getViewport({ scale });
+    pagesBox.innerHTML = "";
+    pageEls.length = 0; rendered.clear();
+    for (let n = 1; n <= pdf.numPages; n++) {
+      const el = h(`<div class="viewer-page" data-page="${n}" style="width:${base.width}px;height:${base.height}px">
+        <canvas></canvas><div class="viewer-overlay"></div><div class="viewer-pno">${n} / ${pdf.numPages}</div></div>`);
+      pagesBox.appendChild(el); pageEls.push(el);
+      wireOverlay(el.querySelector(".viewer-overlay"), n);
+    }
+    observer.disconnect();
+    pageEls.forEach(el => observer.observe(el));
+    drawMarks();
+  }
+  const observer = new IntersectionObserver(entries => entries.forEach(en => {
+    if (en.isIntersecting) renderPage(Number(en.target.dataset.page)).catch(() => {});
+  }), { rootMargin: "600px 0px" });
+
+  function drawMarks() {
+    pageEls.forEach(el => el.querySelectorAll(".viewer-mark").forEach(m => m.remove()));
+    const current = marks.filter(m => m.current);
+    current.forEach(m => {
+      const el = pageEls[m.page - 1];
+      if (!el) return;
+      const box = h(`<div class="viewer-mark" data-mark="${m.id}" title="${esc(m.text || "Highlight")}"
+        style="left:${m.x * 100}%;top:${m.y * 100}%;width:${m.w * 100}%;height:${m.h * 100}%;background:${MARK_FILL[m.colour]};border-color:${MARK_EDGE[m.colour]}">
+        ${m.text ? `<span class="viewer-mark-dot" style="background:${MARK_EDGE[m.colour]}">&#8230;</span>` : ""}</div>`);
+      box.onclick = (e) => { if (drawing) return; e.stopPropagation(); editMark(m); };
+      el.querySelector(".viewer-overlay").appendChild(box);
+    });
+    document.getElementById("pv-count").textContent = marks.length;
+    if (!document.getElementById("pv-side").hidden) drawSide();
+  }
+
+  function wireOverlay(ov, n) {
+    let start = null, ghost = null;
+    const pos = (e) => { const r = ov.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) }; };
+    ov.addEventListener("pointerdown", e => {
+      if (!drawing) return;
+      e.preventDefault(); ov.setPointerCapture(e.pointerId);
+      start = pos(e);
+      ghost = h(`<div class="viewer-mark ghost"></div>`); ov.appendChild(ghost);
+    });
+    ov.addEventListener("pointermove", e => {
+      if (!start) return;
+      const p = pos(e);
+      Object.assign(ghost.style, { left: Math.min(start.x, p.x) * 100 + "%", top: Math.min(start.y, p.y) * 100 + "%",
+        width: Math.abs(p.x - start.x) * 100 + "%", height: Math.abs(p.y - start.y) * 100 + "%" });
+    });
+    const finish = async (e) => {
+      if (!start) return;
+      const p = pos(e), s0 = start; start = null; ghost.remove();
+      const box = { page: n, x: Math.min(s0.x, p.x), y: Math.min(s0.y, p.y), w: Math.abs(p.x - s0.x), h: Math.abs(p.y - s0.y) };
+      if (box.w < 0.01 || box.h < 0.005) return;   // a tap, not a drag
+      newMark(box);
+    };
+    ov.addEventListener("pointerup", finish);
+    ov.addEventListener("pointercancel", () => { start = null; if (ghost) ghost.remove(); });
+  }
+
+  function markDialog(title, m, onSave, onDelete) {
+    const d = document.getElementById("dlg");
+    d.innerHTML = `<h2 style="margin-top:0">${title}</h2>
+      <label class="field">Comment (optional, only you can see it)</label><textarea id="mk-text" placeholder="e.g. Ask the CFO why receivables over 180 days went up">${esc(m.text || "")}</textarea>
+      <label class="field">Colour</label><div class="choices">${Object.keys(MARK_FILL).map(c => `<label class="choice ${(m.colour || "magenta") === c ? "selected" : ""}">
+        <input type="radio" name="mk-col" value="${c}" ${(m.colour || "magenta") === c ? "checked" : ""}><span><span class="swatch" style="background:${MARK_FILL[c]};border-color:${MARK_EDGE[c]}"></span>${c === "magenta" ? "Magenta" : "Navy"}</span></label>`).join("")}</div>
+      <div class="btn-row"><button class="btn" id="mk-save">Save</button><button class="btn light" id="mk-cancel">Cancel</button>
+        ${onDelete ? `<button class="btn danger" id="mk-del">Delete highlight</button>` : ""}</div>`;
+    d.showModal();
+    d.querySelectorAll("input[name=mk-col]").forEach(i => i.onchange = () => d.querySelectorAll(".choice").forEach(c => c.classList.toggle("selected", c.querySelector("input").checked)));
+    d.querySelector("#mk-cancel").onclick = () => d.close();
+    d.querySelector("#mk-save").onclick = async () => {
+      try { await onSave({ text: d.querySelector("#mk-text").value, colour: d.querySelector("input[name=mk-col]:checked").value }); d.close(); }
+      catch (e) { flash(e.message); }
+    };
+    if (onDelete) d.querySelector("#mk-del").onclick = async () => { try { await onDelete(); d.close(); } catch (e) { flash(e.message); } };
+    d.querySelector("#mk-text").focus();
+  }
+  async function reloadMarks() { marks = (await api(`/api/portal/items/${it.id}`)).marks; drawMarks(); }
+  function newMark(box) {
+    markDialog("Add a highlight", {}, async (v) => {
+      await api(`/api/portal/items/${it.id}/marks`, { method: "POST", body: JSON.stringify({ ...box, ...v }) });
+      await reloadMarks();
+    });
+  }
+  function editMark(m) {
+    markDialog(`Highlight on page ${m.page}`, m,
+      async (v) => { await api(`/api/portal/marks/${m.id}`, { method: "POST", body: JSON.stringify(v) }); await reloadMarks(); },
+      async () => { await api(`/api/portal/marks/${m.id}`, { method: "DELETE" }); await reloadMarks(); });
+  }
+  function drawSide() {
+    const side = document.getElementById("pv-side");
+    const cur = marks.filter(m => m.current), old = marks.filter(m => !m.current);
+    side.innerHTML = `<div class="label">My highlights</div>
+      ${cur.length ? cur.map(m => `<button class="viewer-side-item" data-go="${m.id}"><span class="swatch" style="background:${MARK_FILL[m.colour]};border-color:${MARK_EDGE[m.colour]}"></span>
+        <span><strong>Page ${m.page}</strong><br>${m.text ? esc(m.text) : `<span class="meta">No comment</span>`}</span></button>`).join("") : `<p class="meta">None yet.</p>`}
+      ${old.length ? `<div class="label" style="margin-top:1rem">On an earlier version of this paper</div><p class="meta">The paper was replaced after you made these, so they are not drawn on the pages.</p>
+        ${old.map(m => `<div class="viewer-side-item old"><span><strong>Page ${m.page}</strong><br>${m.text ? esc(m.text) : `<span class="meta">No comment</span>`}</span>
+          <button class="btn light" data-delold="${m.id}">Delete</button></div>`).join("")}` : ""}`;
+    side.querySelectorAll("[data-go]").forEach(b => b.onclick = () => {
+      const el = pagesBox.querySelector(`[data-mark="${b.dataset.go}"]`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    side.querySelectorAll("[data-delold]").forEach(b => b.onclick = async () => { await api(`/api/portal/marks/${b.dataset.delold}`, { method: "DELETE" }); await reloadMarks(); });
+  }
+
+  const markBtn = document.getElementById("pv-mark");
+  markBtn.onclick = () => {
+    drawing = !drawing;
+    markBtn.setAttribute("aria-pressed", drawing);
+    markBtn.textContent = drawing ? "Done highlighting" : "Highlight";
+    pagesBox.classList.toggle("drawing", drawing);
+  };
+  document.getElementById("pv-list").onclick = () => {
+    const side = document.getElementById("pv-side");
+    side.hidden = !side.hidden;
+    if (!side.hidden) drawSide();
+  };
+  const zoom = async (f) => {
+    const keep = window.scrollY / Math.max(1, document.body.scrollHeight);
+    scale = Math.min(3, Math.max(0.5, scale * f));
+    await layout();
+    window.scrollTo(0, keep * document.body.scrollHeight);
+  };
+  document.getElementById("pv-in").onclick = () => zoom(1.2);
+  document.getElementById("pv-out").onclick = () => zoom(1 / 1.2);
+  await layout();
 };
