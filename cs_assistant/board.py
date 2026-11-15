@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta
 from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from . import store
+from . import mailer, store
 
 BOARD_DIR = os.path.join(store.DATA_DIR, "board")
 MAX_BYTES = 50 * 1024 * 1024
@@ -120,6 +120,11 @@ CREATE TABLE IF NOT EXISTS board_circulars (
     noted_meeting_id INTEGER, paper_name TEXT, paper_stored TEXT, paper_mime TEXT,
     created TEXT NOT NULL, created_by TEXT, updated TEXT NOT NULL, updated_by TEXT
 );
+CREATE TABLE IF NOT EXISTS board_emails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, kind TEXT NOT NULL, ref_type TEXT NOT NULL,
+    ref_id INTEGER NOT NULL, user_id INTEGER, address TEXT, subject TEXT, error TEXT, sent_by TEXT
+);
+CREATE INDEX IF NOT EXISTS board_emails_ref ON board_emails (ref_type, ref_id);
 CREATE TABLE IF NOT EXISTS board_votes (
     circular_id INTEGER NOT NULL, user_id INTEGER NOT NULL, vote TEXT NOT NULL, comment TEXT, at TEXT NOT NULL,
     PRIMARY KEY (circular_id, user_id)
@@ -534,8 +539,10 @@ def meeting_overview(meeting_id: int) -> dict | None:
         for pv in it["paper_versions"]:
             pv.pop("stored", None)
     attending = sum(1 for p in people if p["rsvp"] and p["rsvp"]["response"] != "absent")
+    for p in people:
+        p["email"] = next((x["email"] for x in _people([p["id"]])), None)
     return {"meeting": m, "items": its, "people": people, "attending": attending,
-            "compliance": compliance(m, list_meetings())}
+            "compliance": compliance(m, list_meetings()), "emails": email_log("meeting", meeting_id)}
 
 
 # -------------------------------------------------------- circular resolutions
@@ -695,6 +702,7 @@ def circular_overview(circular_id: int) -> dict | None:
     cr["replies"] = [{"id": u, "name": names.get(u, f"User {u}"), "interested": u in cr["interested"],
                       "vote": vs.get(u)} for u in cr["recipients"]]
     cr.pop("paper_stored", None)
+    cr["emails"] = email_log("circular", circular_id)
     return cr
 
 
@@ -923,6 +931,119 @@ def portal_circular(circular_id: int, user_id: int) -> dict | None:
         "result": t["label"] if cr["status"] == "closed" else None}
 
 
+# ------------------------------------------------------------------ e-mail
+EMAIL_KINDS = {
+    "published": "Papers ready",
+    "revised": "Paper revised",
+    "remind_reply": "Reminder: attendance",
+    "remind_read": "Reminder: papers not opened",
+    "cancelled": "Meeting cancelled",
+    "circular": "Circular resolution sent",
+    "remind_vote": "Reminder: circular resolution",
+    "minutes_draft": "Draft minutes for comments",
+    "minutes_final": "Signed minutes available",
+}
+
+
+def _people(user_ids: list[int]) -> list[dict]:
+    if not user_ids:
+        return []
+    with store.db() as c:
+        q = f"SELECT id, full_name, email, active FROM users WHERE id IN ({','.join('?' for _ in user_ids)})"
+        return [dict(r) for r in c.execute(q, tuple(user_ids))]
+
+
+def _email_text(kind: str, ref: dict, name: str, company: str) -> tuple[str, str]:
+    link = mailer.site_url() or "the Board portal"
+    date_txt = lambda iso: date.fromisoformat(iso[:10]).strftime("%d %B %Y") if iso else ""  # noqa: E731
+    title = ref.get("title", "")
+    when = f"{date_txt(ref.get('meeting_date'))}{' at ' + ref['start_time'] if ref.get('start_time') else ''}"
+    lines = {
+        "published": (f"Papers for the {title} are ready",
+                      f"The agenda and papers for the {title} on {when} are now in the Board portal."),
+        "revised": (f"A paper for the {title} has been revised",
+                    f"One or more papers for the {title} on {when} have been revised. Revised items are marked in the portal."),
+        "remind_reply": (f"Reminder: will you attend the {title}?",
+                         f"Please let the Company Secretary know in the Board portal whether you will attend the {title} on {when}."),
+        "remind_read": (f"Reminder: papers for the {title}",
+                        f"Some papers for the {title} on {when} are waiting for you in the Board portal."),
+        "cancelled": (f"The {title} has been cancelled", f"The {title} that was to be held on {when} has been cancelled."),
+        "circular": (f"Resolution by circulation: {title}",
+                     f"A resolution by circulation has been sent to you: \"{title}\". Please reply in the Board portal"
+                     f"{' by ' + date_txt(ref.get('respond_by')) if ref.get('respond_by') else ''}."),
+        "remind_vote": (f"Reminder: resolution by circulation - {title}",
+                        f"We have not yet received your reply to the resolution by circulation \"{title}\". Please reply in the Board portal"
+                        f"{' by ' + date_txt(ref.get('respond_by')) if ref.get('respond_by') else ''}."),
+        "minutes_draft": (f"Draft minutes of the {title} for your comments",
+                          f"The draft minutes of the {title} held on {date_txt(ref.get('meeting_date'))} are in the Board portal. "
+                          f"Please send any comments through the portal{' by ' + date_txt(ref.get('comments_by')) if ref.get('comments_by') else ' within 7 days'} (SS-1)."),
+        "minutes_final": (f"Signed minutes of the {title}",
+                          f"The signed minutes of the {title} held on {date_txt(ref.get('meeting_date'))} are now in the Board portal."),
+    }
+    subject, line = lines[kind]
+    body = (f"Dear {name},\n\n{line}\n\nSign in here: {link}\n\n"
+            "For confidentiality, papers are not attached to this e-mail. Please do not forward it.\n\n"
+            f"Company Secretary\n{company}\n")
+    return subject, body
+
+
+def send_notice(kind: str, ref_type: str, ref: dict, user_ids: list[int], sent_by: str) -> dict:
+    """E-mail directors about a meeting, circular resolution or minutes. Logs each attempt."""
+    if kind not in EMAIL_KINDS:
+        raise BoardError("Unknown kind of e-mail.")
+    if not mailer.ready():
+        raise BoardError("E-mail is not set up on the server yet. Ask IT to fill in the SMTP settings (see README).")
+    company = store.get_profile().get("name", "")
+    people = [p for p in _people(user_ids) if p["active"]]
+    to_send, skipped = [], []
+    for p in people:
+        if p["email"]:
+            subject, body = _email_text(kind, ref, p["full_name"], company)
+            to_send.append((p, subject, body))
+        else:
+            skipped.append(p["full_name"])
+    errors = mailer.send_many([(p["email"], p["full_name"], sub, body) for p, sub, body in to_send],
+                              sender_name=f"{store.get_profile().get('brand') or 'Company'} Secretariat")
+    with store.db() as c:
+        c.executemany("INSERT INTO board_emails (at, kind, ref_type, ref_id, user_id, address, subject, error, sent_by) "
+                      "VALUES (?,?,?,?,?,?,?,?,?)",
+                      [(_now(), kind, ref_type, ref["id"], p["id"], p["email"], sub, err, sent_by)
+                       for (p, sub, _), err in zip(to_send, errors)])
+    failed = [p["full_name"] for (p, _, _), err in zip(to_send, errors) if err]
+    return {"sent": len(to_send) - len(failed), "failed": failed, "no_email": skipped,
+            "error": next((e for e in errors if e), None)}
+
+
+def email_log(ref_type: str, ref_id: int) -> list[dict]:
+    names = _names()
+    with store.db() as c:
+        rows = c.execute("SELECT * FROM board_emails WHERE ref_type=? AND ref_id=? ORDER BY id DESC LIMIT 200",
+                         (ref_type, ref_id)).fetchall()
+    return [dict(r) | {"name": names.get(r["user_id"], ""), "kind_label": EMAIL_KINDS.get(r["kind"], r["kind"])} for r in rows]
+
+
+def reminder_targets(meeting_id: int, who: str) -> list[int]:
+    m = get_meeting(meeting_id)
+    if not m:
+        return []
+    if who == "reply":
+        r = rsvps(meeting_id)
+        return [u for u in m["invitees"] if u not in r]
+    if who == "read":
+        v = views(meeting_id)
+        its = [it for it in items(meeting_id) if it["paper_stored"]]
+        return [u for u in m["invitees"] if any(u not in it["withheld_from"] and u not in v.get(it["id"], {}) for it in its)]
+    return list(m["invitees"])
+
+
+def circular_reminder_targets(circular_id: int) -> list[int]:
+    cr = get_circular(circular_id)
+    if not cr:
+        return []
+    vs = votes(circular_id)
+    return [u for u in cr["recipients"] if u not in cr["interested"] and u not in vs]
+
+
 def spec() -> dict:
-    return {"bodies": BODIES, "modes": MODES, "item_kinds": ITEM_KINDS, "rsvp": RSVP_CHOICES, "votes": VOTES,
+    return {"email_ready": mailer.ready(), "email_kinds": EMAIL_KINDS, "bodies": BODIES, "modes": MODES, "item_kinds": ITEM_KINDS, "rsvp": RSVP_CHOICES, "votes": VOTES,
             "meeting_only": MEETING_ONLY_MATTERS, "circular_verify": CIRCULAR_VERIFY, "meeting_verify": MEETING_VERIFY}

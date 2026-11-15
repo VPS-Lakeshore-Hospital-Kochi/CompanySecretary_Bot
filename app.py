@@ -21,7 +21,7 @@ from flask import (Flask, Response, abort, g, jsonify, request, send_file, send_
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from cs_assistant import calendar as cal
-from cs_assistant import twofactor
+from cs_assistant import mailer, twofactor
 from cs_assistant import board, documents, export, files, library, llm, records, registers, store
 from cs_assistant.knowledge import OFFICIAL_LINKS
 
@@ -933,7 +933,44 @@ def board_meeting_status(mid: int):
     except board.BoardError as e:
         return _board_error(e)
     store.log(_who(), f"Meeting marked {status}", f"#{mid} {m['title']}")
-    return jsonify({"ok": True})
+    kind = {"published": "published", "cancelled": "cancelled"}.get(status)
+    if kind == "cancelled" and m["status"] != "published":
+        kind = None  # directors never saw it
+    if kind == "published" and m["published_at"]:
+        kind = None  # re-publishing after taking back to draft: send "revised" by hand if needed
+    return jsonify({"ok": True, "email": _auto_email(kind, "meeting", board.get_meeting(mid), m["invitees"]) if kind else None})
+
+
+def _auto_email(kind: str, ref_type: str, ref: dict, user_ids: list[int]) -> dict | None:
+    """Send the notice if e-mail is set up; a mail failure never undoes the action itself."""
+    if not mailer.ready():
+        return None
+    try:
+        r = board.send_notice(kind, ref_type, ref, user_ids, _who())
+    except board.BoardError as e:
+        return {"error": str(e), "sent": 0, "failed": [], "no_email": []}
+    store.log(_who(), "E-mailed directors", f"{kind} {ref_type} #{ref['id']}: {r['sent']} sent")
+    return r
+
+
+@app.post("/api/board/meetings/<int:mid>/email")
+def board_meeting_email(mid: int):
+    m = _meeting_or_404(mid)
+    kind = request.get_json(force=True).get("kind", "")
+    if kind not in ("published", "revised", "remind_reply", "remind_read"):
+        abort(400)
+    if m["status"] != "published":
+        return jsonify({"error": "Publish the meeting first."}), 400
+    who = {"remind_reply": "reply", "remind_read": "read"}.get(kind, "all")
+    targets = board.reminder_targets(mid, who)
+    if not targets:
+        return jsonify({"error": "No one needs this reminder."}), 400
+    try:
+        r = board.send_notice(kind, "meeting", m, targets, _who())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "E-mailed directors", f"{kind} meeting #{mid}: {r['sent']} sent")
+    return jsonify(r)
 
 
 @app.post("/api/board/meetings/<int:mid>/items")
@@ -1043,7 +1080,26 @@ def board_circular_send(cid: int):
     except board.BoardError as e:
         return _board_error(e)
     store.log(_who(), "Circulated resolution", f"#{cid}")
-    return jsonify({"ok": True})
+    cr = board.get_circular(cid)
+    return jsonify({"ok": True, "email": _auto_email("circular", "circular", cr, cr["recipients"])})
+
+
+@app.post("/api/board/circulars/<int:cid>/email")
+def board_circular_email(cid: int):
+    cr = board.get_circular(cid)
+    if not cr:
+        abort(404)
+    if cr["status"] != "open":
+        return jsonify({"error": "Only an open resolution can be chased."}), 400
+    targets = board.circular_reminder_targets(cid)
+    if not targets:
+        return jsonify({"error": "Every director entitled to vote has replied."}), 400
+    try:
+        r = board.send_notice("remind_vote", "circular", cr, targets, _who())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "E-mailed directors", f"remind_vote circular #{cid}: {r['sent']} sent")
+    return jsonify(r)
 
 
 @app.post("/api/board/circulars/<int:cid>/close")

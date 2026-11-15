@@ -205,3 +205,80 @@ def test_last_admin_cannot_become_a_director(site):
     me = cs.get("/api/me").get_json()["user"]
     r = cs.post(f"/api/users/{me['id']}", json={"role": "director"})
     assert r.status_code == 400
+
+
+class FakeSMTP:
+    sent: list = []
+
+    def __init__(self, host, port, timeout=None):
+        self.host = host
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def starttls(self, context=None):
+        pass
+
+    def login(self, user, password):
+        pass
+
+    def send_message(self, msg):
+        if "bounce" in msg["To"]:
+            import smtplib
+            raise smtplib.SMTPRecipientsRefused({msg["To"]: (550, b"no such user")})
+        FakeSMTP.sent.append(msg)
+
+
+def test_email_notices_and_reminders(site, monkeypatch):
+    from cs_assistant import mailer
+    cs, ids, d = site["cs"], site["ids"], site["d"]
+    monkeypatch.setattr(mailer.smtplib, "SMTP", FakeSMTP)
+    FakeSMTP.sent = []
+    everyone = list(ids.values())
+    mid = cs.post("/api/board/meetings", json={"title": "145th Board Meeting", "meeting_date": "2027-03-10",
+                                               "invitees": everyone}).get_json()["id"]
+    cs.post(f"/api/board/meetings/{mid}/items", data={"title": "Budget", "paper": (io.BytesIO(_pdf()), "budget.pdf")},
+            content_type="multipart/form-data")
+
+    # Without SMTP settings nothing is sent, and the reminder button says why.
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    r = cs.post(f"/api/board/meetings/{mid}/status", json={"status": "published"})
+    assert r.status_code == 200 and r.get_json()["email"] is None
+    r = cs.post(f"/api/board/meetings/{mid}/email", json={"kind": "remind_reply"})
+    assert r.status_code == 400 and "not set up" in r.get_json()["error"]
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.org")
+    monkeypatch.setenv("SMTP_FROM", "cs@example.org")
+    monkeypatch.setenv("SITE_URL", "https://board.example.org/")
+    cs.post(f"/api/users/{ids['chair']}", json={"email": "chair@example.org"})
+    cs.post(f"/api/users/{ids['idir']}", json={"email": "bounce@example.org"})
+    cs.post(f"/api/users/{ids['ned']}", json={"email": ""})
+    d["chair"].post(f"/api/portal/meetings/{mid}/rsvp", json={"response": "in_person"})
+
+    r = cs.post(f"/api/board/meetings/{mid}/email", json={"kind": "remind_reply"}).get_json()
+    # The chair has replied, so only the other two are chased; one bounces, one has no address.
+    assert r["sent"] == 0 and r["failed"] == ["Independent Director"] and r["no_email"] == ["Interested Director"]
+    r = cs.post(f"/api/board/meetings/{mid}/email", json={"kind": "remind_read"}).get_json()
+    assert r["sent"] == 1
+    msg = FakeSMTP.sent[-1]
+    body = msg.get_content()
+    assert msg["To"] == "Dr Chair Person <chair@example.org>"
+    assert "145th Board Meeting" in msg["Subject"] and "https://board.example.org" in body
+    assert "budget" not in body.lower()  # papers and their contents never go by e-mail
+
+    ov = cs.get(f"/api/board/meetings/{mid}").get_json()
+    assert {e["kind"] for e in ov["emails"]} == {"remind_reply", "remind_read"}
+    assert any(e["error"] for e in ov["emails"])
+
+    # Circulating sends the notice; a reminder goes only to those entitled who have not replied.
+    cid = cs.post("/api/board/circulars", json={"title": "Bank signatories", "resolution": "RESOLVED...",
+                                                "recipients": everyone}).get_json()["id"]
+    r = cs.post(f"/api/board/circulars/{cid}/circulate").get_json()
+    assert r["email"]["sent"] == 1
+    d["chair"].post(f"/api/portal/circulars/{cid}/vote", json={"vote": "for"})
+    r = cs.post(f"/api/board/circulars/{cid}/email").get_json()
+    assert r["sent"] == 0 and r["no_email"] == ["Interested Director"]
+    assert "Bank signatories" in FakeSMTP.sent[-1]["Subject"]

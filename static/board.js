@@ -27,6 +27,26 @@ function selectHtml(id, options, value) {
 }
 function fileSizeText(n) { return n ? ` (${fmtSize(n)})` : ""; }
 
+/* What happened to an e-mail send, in a sentence. */
+function emailSummary(r) {
+  if (!r) return "";
+  const parts = [];
+  if (r.sent) parts.push(`E-mail sent to ${r.sent} director${r.sent === 1 ? "" : "s"}.`);
+  if (r.no_email && r.no_email.length) parts.push(`No e-mail address for: ${r.no_email.join(", ")}.`);
+  if (r.failed && r.failed.length) parts.push(`Could not send to: ${r.failed.join(", ")}.`);
+  if (r.error) parts.push(r.error);
+  return parts.join(" ");
+}
+function emailLogHtml(rows) {
+  if (!rows || !rows.length) return `<p class="meta">No e-mails sent yet.</p>`;
+  return `<details><summary>E-mails sent (${rows.length})</summary><div class="md"><table><thead><tr><th>When</th><th>To</th><th>What</th><th>Result</th></tr></thead><tbody>
+    ${rows.map(e => `<tr><td>${esc(e.at.replace("T", " ").slice(0, 16))}</td><td>${esc(e.name)}<div class="meta">${esc(e.address || "")}</div></td>
+      <td>${esc(e.kind_label)}</td><td>${e.error ? `<span style="color:var(--magenta)">${esc(e.error)}</span>` : "Sent"}</td></tr>`).join("")}</tbody></table></div></details>`;
+}
+function emailBanner() {
+  return META.board.email_ready ? "" : `<div class="banner info">E-mail is not set up on the server, so directors are not told by e-mail. Ask IT to fill in the SMTP settings (see README), or tell them yourself.</div>`;
+}
+
 /* ------------------------------------------------------------ Secretariat: list */
 let boardTab = "meetings";
 screens.board = async (param) => {
@@ -206,20 +226,38 @@ screens.bmeeting = async (id) => {
       : `<div class="banner info">No agenda items yet. Start with the usual opening items (leave of absence, confirmation of the previous minutes, action taken report), then the business.</div>`}</div>
     <h2>Directors</h2>
     <div class="step md">${ov.people.length ? `<table><thead><tr><th>Director</th><th>Attending?</th><th>Papers opened</th></tr></thead><tbody>
-      ${ov.people.map(p => `<tr><td>${esc(p.name)}</td>
+      ${ov.people.map(p => `<tr><td>${esc(p.name)}${p.email ? "" : `<div class="meta" style="color:var(--magenta)">No e-mail address</div>`}</td>
         <td>${p.rsvp ? esc(RSVP[p.rsvp.response]) + (p.rsvp.note ? `<div class="meta">${esc(p.rsvp.note)}</div>` : "") : `<span class="meta">No reply yet</span>`}</td>
         <td>${p.papers ? `${p.opened} of ${p.papers}` : "-"}</td></tr>`).join("")}</tbody></table>
       <p class="meta">${ov.attending} of ${ov.people.length} have said they will attend. Check the quorum under Sec. 174 and the Articles (one-third of the directors or two, whichever is more).</p>`
       : `<p>No one is invited yet. Press <strong>Change details</strong> and tick the directors.</p>`}</div>
+    <h2>E-mail the directors</h2>
+    <div class="step">${emailBanner()}
+      ${m.status === "published" ? `<div class="btn-row no-print">
+        <button class="btn light" data-mail="remind_reply">Remind those who have not said if they will attend</button>
+        <button class="btn light" data-mail="remind_read">Remind those with papers not opened</button>
+        ${ov.items.some(i => i.revised) ? `<button class="btn light" data-mail="revised">Tell everyone a paper was revised</button>` : ""}</div>`
+        : `<p class="meta">Directors are e-mailed automatically when the meeting is published.</p>`}
+      <p class="meta">E-mails carry only the meeting's name, date and a sign-in link, never the papers.</p>
+      ${emailLogHtml(ov.emails)}</div>
     ${m.notes ? `<h2>Secretariat notes</h2><div class="step">${esc(m.notes)}</div>` : ""}`;
 
   const reload = () => screens.bmeeting(id);
   const setStatus = async (status) => {
     if (status === "cancelled" && !confirm("Mark this meeting as cancelled? Directors will still see it, marked cancelled.")) return;
-    try { await api(`/api/board/meetings/${m.id}/status`, { method: "POST", body: JSON.stringify({ status }) }); reload(); }
-    catch (e) { flash(e.message); }
+    try {
+      const r = await api(`/api/board/meetings/${m.id}/status`, { method: "POST", body: JSON.stringify({ status }) });
+      await reload();
+      if (r.email) flash(emailSummary(r.email));
+    } catch (e) { flash(e.message); }
   };
   document.getElementById("bm-edit").onclick = () => meetingDialog(m, people, reload);
+  app.querySelectorAll("[data-mail]").forEach(b => b.onclick = async () => {
+    if (!confirm(`${b.textContent}?`)) return;
+    b.disabled = true;
+    try { const r = await api(`/api/board/meetings/${m.id}/email`, { method: "POST", body: JSON.stringify({ kind: b.dataset.mail }) }); await reload(); flash(emailSummary(r)); }
+    catch (e) { b.disabled = false; flash(e.message); }
+  });
   const pub = document.getElementById("bm-pub");
   if (pub) pub.onclick = () => {
     if (confirm(`Publish to ${m.invitees.length} director${m.invitees.length === 1 ? "" : "s"}? They will see the agenda and papers when they sign in.`)) setStatus("published");
@@ -323,7 +361,8 @@ screens.bcircular = async (id) => {
       ${cr.status === "open" ? `${t.state === "majority" ? `<button class="btn" data-close="passed">Record as passed</button>` : ""}
         ${t.state === "meeting" ? `<button class="btn" data-close="referred to meeting">Refer to the next Board meeting</button>` : ""}
         ${t.state === "failed" ? `<button class="btn" data-close="not passed">Record as not passed</button>` : ""}
-        <button class="btn light" data-close="withdrawn">Withdraw</button>` : ""}
+        <button class="btn light" data-close="withdrawn">Withdraw</button>
+        ${META.board.email_ready && t.replies < t.of ? `<button class="btn light" id="bc-remind">E-mail a reminder to those who have not replied</button>` : ""}` : ""}
       ${cr.status === "closed" && cr.outcome === "passed" ? `<button class="btn light" id="bc-dec">Add to Board decisions to follow up</button>` : ""}
       <button class="btn light" onclick="window.print()">Print</button>
     </div>
@@ -338,6 +377,7 @@ screens.bcircular = async (id) => {
         <td>${r.vote ? esc(V[r.vote.vote]) + (r.vote.comment ? `<div class="meta">${esc(r.vote.comment)}</div>` : "") : `<span class="meta">${cr.status === "draft" ? "-" : "No reply yet"}</span>`}</td>
         <td>${r.vote ? esc(r.vote.at.replace("T", " ").slice(0, 16)) : ""}</td></tr>`).join("")}</tbody></table>
       ${cr.status !== "draft" ? `<p class="meta">${t.entitled} director${t.entitled === 1 ? "" : "s"} entitled to vote; ${t.needed} approvals make a majority. ${t.meeting_needed} request${t.meeting_needed === 1 ? "" : "s"} for a meeting would send it to the Board.</p>` : ""}</div>
+    ${cr.status !== "draft" ? `<h2>E-mails</h2><div class="step">${emailBanner()}${emailLogHtml(cr.emails)}</div>` : ""}
     <p class="meta">${esc(META.board.circular_verify)}</p>`;
   const reload = () => screens.bcircular(id);
   const on = (sel, fn) => { const el = document.getElementById(sel); if (el) el.onclick = fn; };
@@ -345,7 +385,11 @@ screens.bcircular = async (id) => {
   on("bc-del", async () => { if (confirm("Delete this draft?")) { await api(`/api/board/circulars/${cr.id}`, { method: "DELETE" }); go("board/circulars"); } });
   on("bc-send", async () => {
     if (!confirm("Circulate now? The text cannot be changed after this, and the directors will see it in the portal.")) return;
-    try { await api(`/api/board/circulars/${cr.id}/circulate`, { method: "POST" }); reload(); } catch (e) { flash(e.message); }
+    try { const r = await api(`/api/board/circulars/${cr.id}/circulate`, { method: "POST" }); await reload(); if (r.email) flash(emailSummary(r.email)); }
+    catch (e) { flash(e.message); }
+  });
+  on("bc-remind", async () => {
+    try { const r = await api(`/api/board/circulars/${cr.id}/email`, { method: "POST" }); await reload(); flash(emailSummary(r)); } catch (e) { flash(e.message); }
   });
   app.querySelectorAll("[data-close]").forEach(b => b.onclick = async () => {
     if (!confirm(`Close this resolution as "${b.dataset.close}"? Directors can no longer reply.`)) return;
