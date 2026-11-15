@@ -17,15 +17,16 @@
     <button onclick="go('home')">Home</button>
     <button onclick="fontSize(-1)" title="Make text smaller" aria-label="Smaller text">A&minus;</button>
     <button onclick="fontSize(1)" title="Make text bigger" aria-label="Bigger text">A+</button>
-    <button onclick="go('help')">Help</button>
+    <button onclick="go('help')" class="staff-only">Help</button>
     <button id="who" onclick="signOut()" hidden>Sign out</button>
   </header>
   <main id="app"></main>
-  <footer class="note">The assistant can make mistakes and the law changes often. Check important points
+  <footer class="note staff-only">The assistant can make mistakes and the law changes often. Check important points
     against the Act, the MCA / regulator portal or your advocate before acting.</footer>
 
   <dialog id="dlg"></dialog>
   <script src="/static/registers.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/board.js"></script>
 </body>
 </html>

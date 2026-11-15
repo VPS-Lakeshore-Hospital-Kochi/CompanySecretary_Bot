@@ -254,3 +254,7 @@ ul.links li { padding: 0.35rem 0; border-top: 1px solid var(--rule); font-size: 
 }
 /* Registers and "Can we share this?" */
 .md .meta, .step .meta, dialog .meta { color: var(--slate); font-size: 0.85rem; }
+
+/* Board portal: directors see only their papers. */
+body.director .staff-only { display: none !important; }
+.card details textarea { margin-top: 0.4rem; min-height: 5rem; }

@@ -21,7 +21,7 @@ from flask import (Flask, Response, abort, g, jsonify, request, send_file, send_
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from cs_assistant import calendar as cal
-from cs_assistant import documents, export, files, library, llm, records, registers, store
+from cs_assistant import board, documents, export, files, library, llm, records, registers, store
 from cs_assistant.knowledge import OFFICIAL_LINKS
 
 
@@ -46,6 +46,7 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 120 * 1024 * 1024
 store.init()
 library.init()
+board.init()
 
 
 def _secret_key() -> str:
@@ -74,6 +75,9 @@ if os.environ.get("ADMIN_USERNAME") and os.environ.get("ADMIN_PASSWORD") and not
                       generate_password_hash(os.environ["ADMIN_PASSWORD"]), "admin")
 
 OPEN_PATHS = {"/", "/api/me", "/api/login", "/api/setup", "/api/logout"}
+# Directors sign in to the Board portal only: nothing of the Secretariat's tools is open to them.
+DIRECTOR_PATHS = {"/", "/api/me", "/api/logout", "/api/me/password"}
+ROLES = ("admin", "member", "director")
 _failures: dict[str, list[float]] = {}
 _fail_lock = threading.Lock()
 
@@ -92,6 +96,11 @@ def _require_login():
         return None
     if not g.user:
         return jsonify({"error": "Please sign in.", "login": True}), 401
+    is_director = g.user["role"] == "director"
+    if is_director and request.path not in DIRECTOR_PATHS and not request.path.startswith("/api/portal/"):
+        return jsonify({"error": "This page is not part of the Board portal."}), 403
+    if not is_director and request.path.startswith("/api/portal/"):
+        return jsonify({"error": "The Board portal is for directors. Use Board meetings instead."}), 403
     return None
 
 
@@ -198,7 +207,7 @@ def users_create():
     err = _password_ok(b.get("password", ""))
     if err or not (b.get("username") or "").strip() or not (b.get("full_name") or "").strip():
         return jsonify({"error": err or "Please fill in every box."}), 400
-    role = "admin" if b.get("role") == "admin" else "member"
+    role = b.get("role") if b.get("role") in ROLES else "member"
     try:
         uid = store.create_user(b["username"], b["full_name"], generate_password_hash(b["password"]), role)
     except ValueError as e:
@@ -218,7 +227,7 @@ def users_update(uid: int):
     if "full_name" in b and str(b["full_name"]).strip():
         fields["full_name"] = str(b["full_name"]).strip()
     if "role" in b:
-        fields["role"] = "admin" if b["role"] == "admin" else "member"
+        fields["role"] = b["role"] if b["role"] in ROLES else "member"
     if "active" in b:
         fields["active"] = 1 if b["active"] else 0
     if b.get("password"):
@@ -227,7 +236,7 @@ def users_update(uid: int):
             return jsonify({"error": err}), 400
         fields["password_hash"] = generate_password_hash(b["password"])
     losing_admin = target["role"] == "admin" and target["active"] and (
-        fields.get("role") == "member" or fields.get("active") == 0)
+        fields.get("role", "admin") != "admin" or fields.get("active") == 0)
     if losing_admin and store.active_admins() <= 1:
         return jsonify({"error": "There must always be at least one active administrator."}), 400
     store.update_user(uid, **fields)
@@ -252,10 +261,11 @@ def backup():
         store.backup_database(db_copy)
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             z.write(db_copy, "cs_assistant.db")
-            for root, _, names in os.walk(library.LIB_DIR):
-                for n in names:
-                    full = os.path.join(root, n)
-                    z.write(full, os.path.relpath(full, store.DATA_DIR))
+            for folder in (library.LIB_DIR, board.BOARD_DIR):
+                for root, _, names in os.walk(folder):
+                    for n in names:
+                        full = os.path.join(root, n)
+                        z.write(full, os.path.relpath(full, store.DATA_DIR))
     store.log(_who(), "Downloaded a backup")
     buf.seek(0)
     return send_file(buf, as_attachment=True, download_name=f"CS_Assistant_backup_{date.today().isoformat()}.zip",
@@ -295,6 +305,7 @@ def meta():
         "transplant_verify": registers.TRANSPLANT_VERIFY,
         "directors_verify": registers.DIRECTORS_VERIFY,
         "committee_presets": registers.COMMITTEE_PRESETS,
+        "board": board.spec(),
         "records": {
             "requesters": [list(x) for x in records.REQUESTERS],
             "types": [{k: r[k] for k in ("id", "title", "examples", "group")} for r in records.RECORDS],
@@ -687,6 +698,339 @@ def profile_save():
         current["flags"] = {k: bool(b["flags"].get(k)) for k in cal.PROFILE_FLAGS}
     store.set_setting("profile", current)
     store.log(_who(), "Changed company details")
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------- board meetings (Secretariat)
+def _board_error(e: Exception):
+    return jsonify({"error": str(e)}), 400
+
+
+def _meeting_or_404(mid: int) -> dict:
+    m = board.get_meeting(mid)
+    if not m:
+        abort(404)
+    return m
+
+
+def _paper_upload() -> tuple[str, bytes] | None:
+    up = request.files.get("paper")
+    return (up.filename or "paper", up.read()) if up and up.filename else None
+
+
+def _form_or_json() -> dict:
+    if request.is_json:
+        return request.get_json(force=True)
+    b = request.form.to_dict()
+    for k in ("invitees", "withheld_from", "recipients", "interested"):
+        if k in b:
+            try:
+                b[k] = json.loads(b[k] or "[]")
+            except ValueError:
+                b[k] = []
+    return b
+
+
+def _send_paper(stored: str | None, name: str | None, mime: str | None, download: bool = False):
+    path = board.file_path(stored)
+    if not path:
+        abort(404)
+    mime = mime or "application/octet-stream"
+    inline = not download and mime in ("application/pdf", "image/png", "image/jpeg")
+    resp = send_file(path, mimetype=mime, as_attachment=not inline, download_name=name or os.path.basename(path))
+    resp.headers["Cache-Control"] = "private, no-store"
+    return resp
+
+
+def _pack_response(data: bytes, m: dict):
+    safe = re.sub(r"[^A-Za-z0-9 _-]+", "", m["title"]).strip().replace(" ", "_")[:60] or "Board_pack"
+    resp = send_file(io.BytesIO(data), mimetype="application/pdf", as_attachment=request.args.get("download") == "1",
+                     download_name=f"{safe}_{m['meeting_date']}_pack.pdf")
+    resp.headers["Cache-Control"] = "private, no-store"
+    return resp
+
+
+@app.get("/api/board/directors")
+def board_directors():
+    return jsonify(board.directors())
+
+
+@app.get("/api/board/meetings")
+def board_meetings():
+    return jsonify({"meetings": board.list_meetings(), "next_due": board.next_board_due(_today()),
+                    "circulars": board.list_circulars()})
+
+
+@app.post("/api/board/meetings")
+def board_meeting_create():
+    try:
+        mid = board.save_meeting(request.get_json(force=True), _who())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Created meeting", f"#{mid}")
+    return jsonify({"id": mid})
+
+
+@app.get("/api/board/meetings/<int:mid>")
+def board_meeting_get(mid: int):
+    return jsonify(board.meeting_overview(mid) or abort(404))
+
+
+@app.post("/api/board/meetings/<int:mid>")
+def board_meeting_update(mid: int):
+    m = _meeting_or_404(mid)
+    try:
+        board.save_meeting(request.get_json(force=True), _who(), mid)
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Changed meeting", f"#{mid} {m['title']}")
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/board/meetings/<int:mid>")
+def board_meeting_delete(mid: int):
+    m = _meeting_or_404(mid)
+    try:
+        board.delete_meeting(mid)
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Deleted meeting", f"#{mid} {m['title']}")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/board/meetings/<int:mid>/status")
+def board_meeting_status(mid: int):
+    m = _meeting_or_404(mid)
+    status = request.get_json(force=True).get("status", "")
+    try:
+        board.set_status(mid, status, _who())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), f"Meeting marked {status}", f"#{mid} {m['title']}")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/board/meetings/<int:mid>/items")
+def board_item_create(mid: int):
+    _meeting_or_404(mid)
+    try:
+        iid = board.save_item(mid, _form_or_json(), _who(), paper=_paper_upload())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Added agenda item", f"meeting #{mid} item #{iid}")
+    return jsonify({"id": iid})
+
+
+@app.post("/api/board/meetings/<int:mid>/items/<int:iid>")
+def board_item_update(mid: int, iid: int):
+    _meeting_or_404(mid)
+    b = _form_or_json()
+    paper = _paper_upload()
+    try:
+        board.save_item(mid, b, _who(), iid, paper=paper, remove_paper=str(b.get("remove_paper")) in ("1", "true", "True"))
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Changed agenda item" + (" and uploaded a new paper" if paper else ""), f"meeting #{mid} item #{iid}")
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/board/meetings/<int:mid>/items/<int:iid>")
+def board_item_delete(mid: int, iid: int):
+    _meeting_or_404(mid)
+    board.delete_item(mid, iid)
+    store.log(_who(), "Removed agenda item", f"meeting #{mid} item #{iid}")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/board/meetings/<int:mid>/order")
+def board_item_order(mid: int):
+    _meeting_or_404(mid)
+    board.reorder(mid, request.get_json(force=True).get("order") or [])
+    return jsonify({"ok": True})
+
+
+@app.post("/api/board/meetings/<int:mid>/note-circulars")
+def board_note_circulars(mid: int):
+    _meeting_or_404(mid)
+    iid = board.note_circulars_at(mid, _who())
+    if not iid:
+        return jsonify({"error": "There are no passed circular resolutions waiting to be noted."}), 400
+    store.log(_who(), "Added circular resolutions for noting", f"meeting #{mid}")
+    return jsonify({"id": iid})
+
+
+@app.get("/api/board/items/<int:iid>/paper")
+def board_item_paper(iid: int):
+    it = board.get_item(iid)
+    if not it:
+        abort(404)
+    return _send_paper(it["paper_stored"], it["paper_name"], it["paper_mime"], request.args.get("download") == "1")
+
+
+@app.get("/api/board/meetings/<int:mid>/pack")
+def board_pack(mid: int):
+    m = _meeting_or_404(mid)
+    data = board.build_pack(mid, f"{g.user['full_name']} (Secretariat copy)")
+    store.log(_who(), "Downloaded Board pack", f"#{mid} {m['title']}")
+    return _pack_response(data, m)
+
+
+@app.post("/api/board/circulars")
+def board_circular_create():
+    try:
+        cid = board.save_circular(_form_or_json(), _who(), paper=_paper_upload())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Drafted circular resolution", f"#{cid}")
+    return jsonify({"id": cid})
+
+
+@app.get("/api/board/circulars/<int:cid>")
+def board_circular_get(cid: int):
+    return jsonify(board.circular_overview(cid) or abort(404))
+
+
+@app.post("/api/board/circulars/<int:cid>")
+def board_circular_update(cid: int):
+    try:
+        board.save_circular(_form_or_json(), _who(), cid, paper=_paper_upload())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Changed circular resolution", f"#{cid}")
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/board/circulars/<int:cid>")
+def board_circular_delete(cid: int):
+    try:
+        board.delete_circular(cid)
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Deleted draft circular resolution", f"#{cid}")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/board/circulars/<int:cid>/circulate")
+def board_circular_send(cid: int):
+    try:
+        board.circulate(cid, _who())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Circulated resolution", f"#{cid}")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/board/circulars/<int:cid>/close")
+def board_circular_close(cid: int):
+    outcome = request.get_json(force=True).get("outcome", "")
+    try:
+        board.close_circular(cid, outcome, _who())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Closed circular resolution", f"#{cid}: {outcome}")
+    return jsonify({"ok": True})
+
+
+@app.get("/api/board/circulars/<int:cid>/paper")
+def board_circular_paper(cid: int):
+    cr = board.get_circular(cid)
+    if not cr:
+        abort(404)
+    return _send_paper(cr["paper_stored"], cr["paper_name"], cr["paper_mime"], request.args.get("download") == "1")
+
+
+# ---------------------------------------------------------------- Board portal (directors)
+def _uid() -> int:
+    return int(g.user["id"])
+
+
+def _portal_meeting_or_404(mid: int) -> dict:
+    m = board.get_meeting(mid)
+    if not board.can_see_meeting(m, _uid()):
+        abort(404)
+    return m
+
+
+def _portal_item_or_404(iid: int) -> dict:
+    it = board.get_item(iid)
+    if not it or _uid() in it["withheld_from"]:
+        abort(404)
+    _portal_meeting_or_404(it["meeting_id"])
+    return it
+
+
+@app.get("/api/portal/home")
+def portal_home():
+    p = store.get_profile()
+    return jsonify(board.portal_home(_uid(), _today()) | {
+        "spec": {k: v for k, v in board.spec().items() if k in ("rsvp", "votes")},
+        "company": {"name": p.get("name", ""), "brand": p.get("brand", ""), "cs_name": p.get("cs_name", "")}})
+
+
+@app.get("/api/portal/meetings/<int:mid>")
+def portal_meeting(mid: int):
+    return jsonify(board.portal_meeting(mid, _uid()) or abort(404))
+
+
+@app.post("/api/portal/meetings/<int:mid>/rsvp")
+def portal_rsvp(mid: int):
+    m = _portal_meeting_or_404(mid)
+    b = request.get_json(force=True)
+    try:
+        board.set_rsvp(mid, _uid(), b.get("response", ""), b.get("note", ""))
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Replied to meeting", f"#{mid} {m['title']}: {b.get('response')}")
+    return jsonify({"ok": True})
+
+
+@app.get("/api/portal/items/<int:iid>/paper")
+def portal_paper(iid: int):
+    it = _portal_item_or_404(iid)
+    board.record_view(iid, _uid())
+    store.log(_who(), "Opened Board paper", f"item #{iid} {it['paper_name'] or ''}")
+    return _send_paper(it["paper_stored"], it["paper_name"], it["paper_mime"], request.args.get("download") == "1")
+
+
+@app.post("/api/portal/items/<int:iid>/note")
+def portal_note(iid: int):
+    _portal_item_or_404(iid)
+    board.save_note(iid, _uid(), request.get_json(force=True).get("text", ""))
+    return jsonify({"ok": True})
+
+
+@app.get("/api/portal/meetings/<int:mid>/pack")
+def portal_pack(mid: int):
+    m = _portal_meeting_or_404(mid)
+    data = board.build_pack(mid, g.user["full_name"], _uid())
+    for it in board.items_for(mid, _uid()):
+        if it["paper_stored"]:
+            board.record_view(it["id"], _uid())
+    store.log(_who(), "Downloaded Board pack", f"#{mid} {m['title']}")
+    return _pack_response(data, m)
+
+
+@app.get("/api/portal/circulars/<int:cid>")
+def portal_circular(cid: int):
+    return jsonify(board.portal_circular(cid, _uid()) or abort(404))
+
+
+@app.get("/api/portal/circulars/<int:cid>/paper")
+def portal_circular_paper(cid: int):
+    if not board.portal_circular(cid, _uid()):
+        abort(404)
+    cr = board.get_circular(cid)
+    return _send_paper(cr["paper_stored"], cr["paper_name"], cr["paper_mime"], request.args.get("download") == "1")
+
+
+@app.post("/api/portal/circulars/<int:cid>/vote")
+def portal_vote(cid: int):
+    b = request.get_json(force=True)
+    try:
+        board.cast_vote(cid, _uid(), b.get("vote", ""), b.get("comment", ""))
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Replied to circular resolution", f"#{cid}: {b.get('vote')}")
     return jsonify({"ok": True})
 
 

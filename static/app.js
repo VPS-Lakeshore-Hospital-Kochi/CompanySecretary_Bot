@@ -416,6 +416,8 @@ screens.home = () => {
         <div class="d">A shareholder, the police, a court, an insurer or a patient's family wants our records. See what the law allows, log the request, and check how long to keep records.</div></button>
       <button class="tile" onclick="go('committees')"><span class="num">08</span><span class="t">Committees &amp; decisions</span>
         <div class="d">Board and hospital committees, directors' disclosures and KYC, Transplant Authorisation Committee files, and Board decisions to follow up.</div></button>
+      <button class="tile" onclick="go('board')"><span class="num">09</span><span class="t">Board meetings &amp; portal</span>
+        <div class="d">Build the agenda and papers, publish them to the directors' portal, see who will attend and who has read them. Resolutions by circulation.</div></button>
     </div>
     <div class="tiles" style="margin-top:1rem">
       <button class="tile small" onclick="go('library')"><span class="t">Document library</span><div class="d">Minutes, registers, policies, contracts, licences, templates - in folders.</div></button>
@@ -1217,18 +1219,18 @@ async function drawUsers() {
   const box = document.getElementById("users");
   const users = await api("/api/users");
   box.innerHTML = `<div class="md"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last signed in</th><th></th></tr></thead><tbody>
-    ${users.map(u => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.username)}</td><td>${u.role === "admin" ? "Administrator" : "Member"}</td>
+    ${users.map(u => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.username)}</td><td>${{ admin: "Administrator", member: "Member", director: "Director (Board portal only)" }[u.role] || esc(u.role)}</td>
       <td>${u.active ? "Active" : "Switched off"}</td><td>${u.last_login ? fmtDate(u.last_login.slice(0, 10)) : "-"}</td>
       <td><button class="btn light" data-u="${u.id}">Change</button></td></tr>`).join("")}</tbody></table></div>
     <div class="btn-row"><button class="btn" id="u-add">+ Add a person</button></div>
-    <p class="meta">Members can use everything except user management, backup and company details. Switch a person off when they leave; their name stays in the activity log.</p>`;
+    <p class="meta">Members can use everything except user management, backup and company details. Directors see only the Board portal: the meetings and resolutions sent to them. Switch a person off when they leave (or a director's term ends); they are signed out at once and their name stays in the activity log.</p>`;
   const dlgUser = (u) => {
     const d = document.getElementById("dlg");
     d.innerHTML = `<h2 style="margin-top:0">${u ? "Change " + esc(u.full_name) : "Add a person"}</h2>
       <label class="field">Full name</label><input type="text" id="nu-name" value="${esc(u ? u.full_name : "")}">
       ${u ? "" : `<label class="field">Username (used to sign in)</label><input type="text" id="nu-user" placeholder="e.g. anita.menon">`}
       <label class="field">${u ? "New password (leave empty to keep the current one)" : "Password (8 or more characters)"}</label><input type="password" id="nu-pw" autocomplete="new-password">
-      <label class="field">Role</label><select id="nu-role"><option value="member">Member</option><option value="admin" ${u && u.role === "admin" ? "selected" : ""}>Administrator</option></select>
+      <label class="field">Role</label><select id="nu-role"><option value="member">Member (CS team)</option><option value="admin" ${u && u.role === "admin" ? "selected" : ""}>Administrator (CS team)</option><option value="director" ${u && u.role === "director" ? "selected" : ""}>Director (Board portal only)</option></select>
       ${u ? `<label class="choice" style="margin-top:0.8rem"><input type="checkbox" id="nu-active" ${u.active ? "checked" : ""}><span>Allowed to sign in</span></label>` : ""}
       <div class="btn-row"><button class="btn" id="nu-save">Save</button><button class="btn light" id="nu-cancel">Cancel</button></div>`;
     d.showModal();
@@ -1295,16 +1297,19 @@ function showSetup() {
 }
 async function signOut() {
   await fetch("/api/logout", { method: "POST" });
-  ME = null; askSession = null;
+  ME = null; askSession = null; PORTAL = null;
+  document.body.classList.remove("director");
   document.getElementById("who").hidden = true;
   showSignIn();
 }
 
 function go(name) { if (location.hash === "#" + name) route(); else location.hash = name; }
+const PORTAL_SCREENS = ["portal", "pmeeting", "pcircular"];
 function route() {
   if (!ME) return;
   const [name, param] = (location.hash || "#home").slice(1).split("/");
-  (screens[name] || screens.home)(param);
+  if (ME.role === "director") (PORTAL_SCREENS.includes(name) ? screens[name] : screens.portal)(param);
+  else (PORTAL_SCREENS.includes(name) ? screens.home : screens[name] || screens.home)(param);
   window.scrollTo(0, 0);
 }
 function setCompany() {
@@ -1319,9 +1324,17 @@ async function start() {
   if (!me.user) return showSignIn();
   ME = me.user;
   document.body.classList.remove("signed-out");
+  document.body.classList.toggle("director", ME.role === "director");
   const who = document.getElementById("who");
   who.hidden = false;
   who.textContent = `Sign out (${ME.full_name.split(" ")[0]})`;
+  if (ME.role === "director") {
+    // Directors see only the Board portal; the Secretariat's tools and settings are not sent to them.
+    document.getElementById("company-name").textContent = "Board portal";
+    document.querySelector("header .brand .name").textContent = "Board Papers";
+    route();
+    return;
+  }
   META = await api("/api/meta");
   setCompany();
   route();
