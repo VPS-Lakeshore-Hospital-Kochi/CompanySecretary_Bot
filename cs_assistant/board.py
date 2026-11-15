@@ -120,6 +120,17 @@ CREATE TABLE IF NOT EXISTS board_circulars (
     noted_meeting_id INTEGER, paper_name TEXT, paper_stored TEXT, paper_mime TEXT,
     created TEXT NOT NULL, created_by TEXT, updated TEXT NOT NULL, updated_by TEXT
 );
+CREATE TABLE IF NOT EXISTS board_minutes (
+    meeting_id INTEGER PRIMARY KEY, version INTEGER NOT NULL DEFAULT 0,
+    draft_name TEXT, draft_stored TEXT, draft_mime TEXT, draft_uploaded TEXT,
+    circulated_at TEXT, comments_by TEXT,
+    signed_on TEXT, signed_by TEXT, signed_name TEXT, signed_stored TEXT, signed_mime TEXT, library_doc_id INTEGER,
+    updated TEXT NOT NULL, updated_by TEXT
+);
+CREATE TABLE IF NOT EXISTS board_minute_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+    version INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT, at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS board_emails (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, kind TEXT NOT NULL, ref_type TEXT NOT NULL,
     ref_id INTEGER NOT NULL, user_id INTEGER, address TEXT, subject TEXT, error TEXT, sent_by TEXT
@@ -542,7 +553,8 @@ def meeting_overview(meeting_id: int) -> dict | None:
     for p in people:
         p["email"] = next((x["email"] for x in _people([p["id"]])), None)
     return {"meeting": m, "items": its, "people": people, "attending": attending,
-            "compliance": compliance(m, list_meetings()), "emails": email_log("meeting", meeting_id)}
+            "compliance": compliance(m, list_meetings()), "emails": email_log("meeting", meeting_id),
+            "minutes": minutes_overview(meeting_id, date.today())}
 
 
 # -------------------------------------------------------- circular resolutions
@@ -889,7 +901,9 @@ def portal_home(user_id: int, today: date) -> dict:
         meetings.append({k: m[k] for k in ("id", "body", "title", "meeting_date", "start_time", "venue", "mode", "status")}
                         | {"rsvp": r["response"] if r else None, "papers": len(with_paper),
                            "unread": sum(1 for it in with_paper if user_id not in v.get(it["id"], {})),
-                           "revised": sum(1 for it in its if is_revised(it, m))})
+                           "revised": sum(1 for it in its if is_revised(it, m)),
+                           "minutes": (lambda pm: {"stage": pm["stage"], "reply_needed": pm["stage"] == "circulated" and not pm["my_reply"],
+                                                   "comments_by": pm["comments_by"]} if pm else None)(portal_minutes(m["id"], user_id))})
     circulars = []
     for cr in list_circulars():
         if user_id not in cr["recipients"] or cr["status"] == "draft":
@@ -916,7 +930,7 @@ def portal_meeting(meeting_id: int, user_id: int) -> dict | None:
                             "note": notes.get(it["id"], "")})
     return {"meeting": {k: m[k] for k in ("id", "body", "title", "meeting_date", "start_time", "venue", "mode",
                                           "video_link", "status", "published_at")},
-            "items": out_items, "rsvp": r}
+            "items": out_items, "rsvp": r, "minutes": portal_minutes(meeting_id, user_id)}
 
 
 def portal_circular(circular_id: int, user_id: int) -> dict | None:
@@ -929,6 +943,168 @@ def portal_circular(circular_id: int, user_id: int) -> dict | None:
                                "circulated_at", "closed_at", "paper_name")} | {
         "interested": user_id in cr["interested"], "my_vote": mine,
         "result": t["label"] if cr["status"] == "closed" else None}
+
+
+# ------------------------------------------------------------------ minutes
+MINUTES_VERIFY = (
+    "SS-1 para 7.4 and 7.6: circulate the draft minutes to all directors within 15 days of the meeting; directors send "
+    "comments within 7 days of receiving them; the Chairperson signs the final minutes within 30 days of the meeting (or "
+    "the Chairperson of the next meeting signs them), and they are entered in the minutes book within 30 days. A click in "
+    "this portal is not a signature: keep the Chairman's signed copy (wet ink or a digital signature under the IT Act) "
+    "and upload it here."
+)
+
+
+def get_minutes(meeting_id: int) -> dict | None:
+    with store.db() as c:
+        r = c.execute("SELECT * FROM board_minutes WHERE meeting_id=?", (meeting_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def minute_comments(meeting_id: int) -> list[dict]:
+    names = _names()
+    with store.db() as c:
+        rows = c.execute("SELECT * FROM board_minute_comments WHERE meeting_id=? ORDER BY id", (meeting_id,)).fetchall()
+    return [dict(r) | {"name": names.get(r["user_id"], "")} for r in rows]
+
+
+def minutes_stage(mn: dict | None) -> str:
+    if not mn or not mn.get("draft_stored"):
+        return "none"
+    if mn.get("signed_on"):
+        return "signed"
+    if mn.get("circulated_at"):
+        return "circulated"
+    return "drafted"
+
+
+def save_minutes_draft(meeting_id: int, paper: tuple[str, bytes], user: str) -> None:
+    m = get_meeting(meeting_id)
+    if not m:
+        raise BoardError("That meeting no longer exists.")
+    if m["status"] != "held":
+        raise BoardError("Mark the meeting as held before adding its minutes.")
+    mn = get_minutes(meeting_id)
+    if mn and mn.get("signed_on"):
+        raise BoardError("The minutes are already signed and cannot be replaced.")
+    name, stored, mime, _ = _store_file(f"m{meeting_id}/minutes", *paper)
+    with store.db() as c:
+        if mn:
+            c.execute("UPDATE board_minutes SET draft_name=?, draft_stored=?, draft_mime=?, draft_uploaded=?, updated=?, updated_by=? "
+                      "WHERE meeting_id=?", (name, stored, mime, _stamp(), _now(), user, meeting_id))
+        else:
+            c.execute("INSERT INTO board_minutes (meeting_id, draft_name, draft_stored, draft_mime, draft_uploaded, updated, updated_by) "
+                      "VALUES (?,?,?,?,?,?,?)", (meeting_id, name, stored, mime, _stamp(), _now(), user))
+
+
+def circulate_minutes(meeting_id: int, user: str, today: date | None = None) -> dict:
+    mn = get_minutes(meeting_id)
+    if minutes_stage(mn) not in ("drafted", "circulated"):
+        raise BoardError("Upload the draft minutes first." if minutes_stage(mn) == "none" else "The minutes are already signed.")
+    today = today or date.today()
+    comments_by = (today + timedelta(days=7)).isoformat()
+    with store.db() as c:
+        c.execute("UPDATE board_minutes SET version=version+1, circulated_at=?, comments_by=?, updated=?, updated_by=? WHERE meeting_id=?",
+                  (_stamp(), comments_by, _now(), user, meeting_id))
+    return get_minutes(meeting_id)
+
+
+def comment_on_minutes(meeting_id: int, user_id: int, kind: str, text: str) -> None:
+    m = get_meeting(meeting_id)
+    mn = get_minutes(meeting_id)
+    if not can_see_meeting(m, user_id) or minutes_stage(mn) != "circulated":
+        raise BoardError("The draft minutes are not open for comments.")
+    text = _text(text, 10000)
+    if kind not in ("comment", "no_comments"):
+        raise BoardError("Unknown reply.")
+    if kind == "comment" and not text:
+        raise BoardError("Please type your comments, or choose 'No comments'.")
+    with store.db() as c:
+        c.execute("INSERT INTO board_minute_comments (meeting_id, user_id, version, kind, text, at) VALUES (?,?,?,?,?,?)",
+                  (meeting_id, user_id, mn["version"], kind, text if kind == "comment" else "", _now()))
+
+
+def sign_minutes(meeting_id: int, signed_on: str, signed_by: str, paper: tuple[str, bytes] | None, user: str) -> dict:
+    mn = get_minutes(meeting_id)
+    if minutes_stage(mn) != "circulated":
+        raise BoardError("Circulate the draft minutes for comments before recording the signature."
+                         if minutes_stage(mn) == "drafted" else "Upload and circulate the draft minutes first."
+                         if minutes_stage(mn) == "none" else "The minutes are already signed.")
+    signed_on = _date(signed_on, "the date the minutes were signed", required=True)
+    m = get_meeting(meeting_id)
+    if signed_on < m["meeting_date"]:
+        raise BoardError("The minutes cannot be signed before the meeting was held.")
+    signed_by = _text(signed_by, 200)
+    if not signed_by:
+        raise BoardError("Please enter who signed the minutes (the Chairperson).")
+    if not paper:
+        raise BoardError("Please upload the signed copy of the minutes.")
+    name, stored, mime, _ = _store_file(f"m{meeting_id}/minutes", *paper)
+    with store.db() as c:
+        c.execute("UPDATE board_minutes SET signed_on=?, signed_by=?, signed_name=?, signed_stored=?, signed_mime=?, updated=?, updated_by=? "
+                  "WHERE meeting_id=?", (signed_on, signed_by, name, stored, mime, _now(), user, meeting_id))
+    return get_minutes(meeting_id)
+
+
+def set_minutes_library_doc(meeting_id: int, doc_id: int) -> None:
+    with store.db() as c:
+        c.execute("UPDATE board_minutes SET library_doc_id=? WHERE meeting_id=?", (doc_id, meeting_id))
+
+
+def minutes_checks(m: dict, mn: dict | None, today: date) -> list[dict]:
+    if m["status"] != "held":
+        return []
+    md = date.fromisoformat(m["meeting_date"])
+    out = []
+    circ_by, sign_by = md + timedelta(days=15), md + timedelta(days=30)
+    if mn and mn.get("circulated_at"):
+        sent = date.fromisoformat(mn["circulated_at"][:10])
+        gap = (sent - md).days
+        out.append({"level": "ok" if gap <= 15 else "warn",
+                    "text": f"Draft minutes circulated {gap} days after the meeting" + ("." if gap <= 15 else " - SS-1 allows 15 days.")})
+    else:
+        left = (circ_by - today).days
+        out.append({"level": "warn" if left >= 0 else "error",
+                    "text": f"Circulate the draft minutes by {circ_by.strftime('%d %B %Y')}"
+                            + (f" ({left} days left)." if left >= 0 else f" - {-left} days late.")})
+    if mn and mn.get("signed_on"):
+        gap = (date.fromisoformat(mn["signed_on"]) - md).days
+        out.append({"level": "ok" if gap <= 30 else "warn",
+                    "text": f"Signed by {mn['signed_by']} {gap} days after the meeting"
+                            + ("." if gap <= 30 else " - SS-1 asks for 30 days.")})
+    else:
+        left = (sign_by - today).days
+        out.append({"level": "warn" if left >= 0 else "error",
+                    "text": f"The Chairperson should sign the minutes by {sign_by.strftime('%d %B %Y')}"
+                            + (f" ({left} days left)." if left >= 0 else f" - {-left} days late.")})
+    return out
+
+
+def minutes_overview(meeting_id: int, today: date) -> dict:
+    m = get_meeting(meeting_id)
+    mn = get_minutes(meeting_id)
+    names = _names()
+    comments = minute_comments(meeting_id)
+    latest = {}
+    if mn:
+        for cm in comments:
+            if cm["version"] == mn["version"]:
+                latest[cm["user_id"]] = cm
+    replies = [{"id": u, "name": names.get(u, f"User {u}"), "reply": latest.get(u)} for u in m["invitees"]]
+    public = {k: v for k, v in (mn or {}).items() if not k.endswith("_stored")}
+    return {"stage": minutes_stage(mn), "minutes": public, "comments": comments, "replies": replies,
+            "checks": minutes_checks(m, mn, today)}
+
+
+def portal_minutes(meeting_id: int, user_id: int) -> dict | None:
+    mn = get_minutes(meeting_id)
+    stage = minutes_stage(mn)
+    if stage not in ("circulated", "signed"):
+        return None
+    mine = [c for c in minute_comments(meeting_id) if c["user_id"] == user_id and c["version"] == mn["version"]]
+    return {"stage": stage, "version": mn["version"], "comments_by": mn["comments_by"], "draft_name": mn["draft_name"],
+            "signed_on": mn["signed_on"], "signed_by": mn["signed_by"], "signed_name": mn["signed_name"],
+            "my_reply": mine[-1] if mine else None}
 
 
 # ------------------------------------------------------------------ e-mail
@@ -1046,4 +1222,4 @@ def circular_reminder_targets(circular_id: int) -> list[int]:
 
 def spec() -> dict:
     return {"email_ready": mailer.ready(), "email_kinds": EMAIL_KINDS, "bodies": BODIES, "modes": MODES, "item_kinds": ITEM_KINDS, "rsvp": RSVP_CHOICES, "votes": VOTES,
-            "meeting_only": MEETING_ONLY_MATTERS, "circular_verify": CIRCULAR_VERIFY, "meeting_verify": MEETING_VERIFY}
+            "meeting_only": MEETING_ONLY_MATTERS, "minutes_verify": MINUTES_VERIFY, "circular_verify": CIRCULAR_VERIFY, "meeting_verify": MEETING_VERIFY}

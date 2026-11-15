@@ -282,3 +282,71 @@ def test_email_notices_and_reminders(site, monkeypatch):
     r = cs.post(f"/api/board/circulars/{cid}/email").get_json()
     assert r["sent"] == 0 and r["no_email"] == ["Interested Director"]
     assert "Bank signatories" in FakeSMTP.sent[-1]["Subject"]
+
+
+def test_minutes_workflow(site, monkeypatch):
+    cs, ids, d = site["cs"], site["ids"], site["d"]
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    everyone = list(ids.values())
+    mid = cs.post("/api/board/meetings", json={"title": "146th Board Meeting", "meeting_date": "2026-11-01",
+                                               "invitees": everyone}).get_json()["id"]
+    cs.post(f"/api/board/meetings/{mid}/items", json={"title": "Any other business"})
+    cs.post(f"/api/board/meetings/{mid}/status", json={"status": "published"})
+    up = lambda name="draft.pdf": {"paper": (io.BytesIO(_pdf()), name)}  # noqa: E731
+
+    # Minutes only after the meeting is held.
+    r = cs.post(f"/api/board/meetings/{mid}/minutes/draft", data=up(), content_type="multipart/form-data")
+    assert r.status_code == 400 and "held" in r.get_json()["error"]
+    cs.post(f"/api/board/meetings/{mid}/status", json={"status": "held"})
+    assert cs.post(f"/api/board/meetings/{mid}/minutes/circulate").status_code == 400  # nothing to send yet
+    assert cs.post(f"/api/board/meetings/{mid}/minutes/draft", data=up(), content_type="multipart/form-data").status_code == 200
+
+    mo = cs.get(f"/api/board/meetings/{mid}").get_json()["minutes"]
+    assert mo["stage"] == "drafted" and "draft_stored" not in mo["minutes"]
+    assert any("Circulate the draft minutes by 16 November 2026" in c["text"] for c in mo["checks"])
+    assert d["chair"].get(f"/api/portal/meetings/{mid}").get_json()["minutes"] is None  # not sent yet
+    assert d["chair"].get(f"/api/portal/meetings/{mid}/minutes/file").status_code == 404
+
+    # Cannot sign before circulating.
+    r = cs.post(f"/api/board/meetings/{mid}/minutes/sign", data={"signed_on": "2026-11-20", "signed_by": "Chair", **up("s.pdf")},
+                content_type="multipart/form-data")
+    assert r.status_code == 400
+    assert cs.post(f"/api/board/meetings/{mid}/minutes/circulate").status_code == 200
+
+    home = d["chair"].get("/api/portal/home").get_json()
+    mine = next(x for x in home["meetings"] if x["id"] == mid)
+    assert mine["minutes"]["reply_needed"] is True
+    assert d["chair"].get(f"/api/portal/meetings/{mid}/minutes/file").status_code == 200
+    assert d["chair"].post(f"/api/portal/meetings/{mid}/minutes/comment", json={"kind": "comment", "text": ""}).status_code == 400
+    assert d["chair"].post(f"/api/portal/meetings/{mid}/minutes/comment", json={"kind": "comment", "text": "Item 1: add my query"}).status_code == 200
+    assert d["idir"].post(f"/api/portal/meetings/{mid}/minutes/comment", json={"kind": "no_comments"}).status_code == 200
+    mo = cs.get(f"/api/board/meetings/{mid}").get_json()["minutes"]
+    replies = {r["name"]: r["reply"] for r in mo["replies"]}
+    assert replies["Dr Chair Person"]["text"] == "Item 1: add my query" and replies["Independent Director"]["kind"] == "no_comments"
+    assert replies["Interested Director"] is None
+
+    # A revised draft goes out again; replies to the old draft no longer count as replies to the new one.
+    cs.post(f"/api/board/meetings/{mid}/minutes/draft", data=up("draft-v2.pdf"), content_type="multipart/form-data")
+    cs.post(f"/api/board/meetings/{mid}/minutes/circulate")
+    mo = cs.get(f"/api/board/meetings/{mid}").get_json()["minutes"]
+    assert mo["minutes"]["version"] == 2 and all(r["reply"] is None for r in mo["replies"]) and len(mo["comments"]) == 2
+
+    # Signing needs a signed copy, and files it in the library.
+    r = cs.post(f"/api/board/meetings/{mid}/minutes/sign", data={"signed_on": "2026-11-20", "signed_by": "Dr Chair Person"},
+                content_type="multipart/form-data")
+    assert r.status_code == 400
+    r = cs.post(f"/api/board/meetings/{mid}/minutes/sign",
+                data={"signed_on": "2026-11-20", "signed_by": "Dr Chair Person, Chairman", **up("signed.pdf")},
+                content_type="multipart/form-data")
+    assert r.status_code == 200 and r.get_json()["library_doc_id"]
+    doc = cs.get(f"/api/library/{r.get_json()['library_doc_id']}").get_json()
+    assert doc["category"] == "board" and "146th" in doc["title"]
+    mo = cs.get(f"/api/board/meetings/{mid}").get_json()["minutes"]
+    assert mo["stage"] == "signed" and any(c["text"].startswith("Signed by Dr Chair Person") for c in mo["checks"])
+    assert cs.post(f"/api/board/meetings/{mid}/minutes/draft", data=up(), content_type="multipart/form-data").status_code == 400
+
+    pm = d["ned"].get(f"/api/portal/meetings/{mid}").get_json()["minutes"]
+    assert pm["stage"] == "signed"
+    assert d["ned"].get(f"/api/portal/meetings/{mid}/minutes/file?which=signed").status_code == 200
+    assert d["ned"].get(f"/api/portal/meetings/{mid}/minutes/file?which=draft").status_code == 404
+    assert d["ned"].post(f"/api/portal/meetings/{mid}/minutes/comment", json={"kind": "no_comments"}).status_code == 400

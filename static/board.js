@@ -231,6 +231,7 @@ screens.bmeeting = async (id) => {
         <td>${p.papers ? `${p.opened} of ${p.papers}` : "-"}</td></tr>`).join("")}</tbody></table>
       <p class="meta">${ov.attending} of ${ov.people.length} have said they will attend. Check the quorum under Sec. 174 and the Articles (one-third of the directors or two, whichever is more).</p>`
       : `<p>No one is invited yet. Press <strong>Change details</strong> and tick the directors.</p>`}</div>
+    ${m.status === "held" ? minutesSectionHtml(m, ov.minutes) : ""}
     <h2>E-mail the directors</h2>
     <div class="step">${emailBanner()}
       ${m.status === "published" ? `<div class="btn-row no-print">
@@ -252,6 +253,7 @@ screens.bmeeting = async (id) => {
     } catch (e) { flash(e.message); }
   };
   document.getElementById("bm-edit").onclick = () => meetingDialog(m, people, reload);
+  if (m.status === "held") wireMinutes(m, ov.minutes, reload);
   app.querySelectorAll("[data-mail]").forEach(b => b.onclick = async () => {
     if (!confirm(`${b.textContent}?`)) return;
     b.disabled = true;
@@ -303,6 +305,64 @@ screens.bmeeting = async (id) => {
     go("draft");
   };
 };
+
+/* ------------------------------------------------------ Secretariat: minutes */
+function minutesSectionHtml(m, mo) {
+  const mn = mo.minutes || {}, levelClass = { ok: "info", warn: "warn", error: "error" };
+  const draftLink = mn.draft_name ? `<a href="/api/board/meetings/${m.id}/minutes/file?which=draft" target="_blank" rel="noopener">${esc(mn.draft_name)}</a>` : "";
+  const stageText = { none: "No draft yet", drafted: "Draft ready - not yet sent to directors", circulated: `Draft v${mn.version} with directors for comments until ${fmtDate(mn.comments_by)}`, signed: "Signed" }[mo.stage];
+  let body = "";
+  if (mo.stage === "none" || mo.stage === "drafted" || mo.stage === "circulated") {
+    body += `<div class="inline"><div><label class="field">${mo.stage === "none" ? "Upload the draft minutes" : "Upload a revised draft"} (PDF is best for tablets)</label>
+        <input type="file" id="mn-file" accept=".pdf,.docx,.doc"></div><div><button class="btn light" id="mn-up">Upload</button></div></div>`;
+  }
+  if (mo.stage === "drafted" || mo.stage === "circulated") {
+    body += `<p>Draft: ${draftLink}</p><div class="btn-row"><button class="btn" id="mn-circ">${mo.stage === "circulated" ? "Send the revised draft again (7 more days)" : "Circulate to directors for comments (7 days)"}</button></div>`;
+  }
+  if (mo.stage === "circulated") {
+    body += `<div class="md"><table><thead><tr><th>Director</th><th>Reply on this draft</th></tr></thead><tbody>
+      ${mo.replies.map(r => `<tr><td>${esc(r.name)}</td><td>${r.reply ? (r.reply.kind === "no_comments" ? "No comments" : esc(r.reply.text)) + `<div class="meta">${esc(r.reply.at.replace("T", " ").slice(0, 16))}</div>` : `<span class="meta">No reply yet</span>`}</td></tr>`).join("")}</tbody></table></div>
+      ${mo.comments.some(c => c.version < mn.version) ? `<details><summary>Comments on earlier drafts</summary><ul>${mo.comments.filter(c => c.version < mn.version).map(c => `<li>v${c.version} &middot; ${esc(c.name)}: ${c.kind === "no_comments" ? "No comments" : esc(c.text)}</li>`).join("")}</ul></details>` : ""}
+      <h3>Record the Chairperson's signature</h3>
+      <div class="inline"><div><label class="field">Signed on</label><input type="date" id="mn-on" value="${todayIso()}"></div>
+        <div><label class="field">Signed by (Chairperson)</label><input type="text" id="mn-by" placeholder="e.g. Dr Chair Person, Chairman"></div></div>
+      <label class="field">Signed copy (scan or digitally signed PDF)</label><input type="file" id="mn-signed" accept=".pdf,.png,.jpg,.jpeg">
+      <div class="btn-row"><button class="btn" id="mn-sign">Record as signed</button></div>`;
+  }
+  if (mo.stage === "signed") {
+    body += `<p>&#10003; Signed by <strong>${esc(mn.signed_by)}</strong> on ${fmtDate(mn.signed_on)}:
+      <a href="/api/board/meetings/${m.id}/minutes/file?which=signed" target="_blank" rel="noopener">${esc(mn.signed_name)}</a>.
+      ${mn.library_doc_id ? `Also saved in the <a href="#doc/${mn.library_doc_id}">document library</a>.` : ""} Directors can now read the signed minutes in the portal.</p>`;
+  }
+  return `<h2>Minutes</h2><div class="step"><div class="label">${esc(stageText)}</div>
+    ${mo.checks.map(c => `<div class="banner ${levelClass[c.level]}" style="margin:0.3rem 0">${c.level === "ok" ? "&#10003; " : ""}${esc(c.text)}</div>`).join("")}
+    ${body}<p class="meta">${esc(META.board.minutes_verify)}</p></div>`;
+}
+
+function wireMinutes(m, mo, reload) {
+  const on = (sel, fn) => { const el = document.getElementById(sel); if (el) el.onclick = fn; };
+  on("mn-up", async () => {
+    const f = document.getElementById("mn-file").files[0];
+    if (!f) return flash("Choose the draft minutes file first.");
+    const fd = new FormData(); fd.append("paper", f);
+    try { await postForm(`/api/board/meetings/${m.id}/minutes/draft`, fd); reload(); } catch (e) { flash(e.message); }
+  });
+  on("mn-circ", async () => {
+    if (!confirm("Send the draft minutes to the directors for their comments? They will have 7 days.")) return;
+    try { const r = await api(`/api/board/meetings/${m.id}/minutes/circulate`, { method: "POST" }); await reload(); if (r.email) flash(emailSummary(r.email)); }
+    catch (e) { flash(e.message); }
+  });
+  on("mn-sign", async () => {
+    const f = document.getElementById("mn-signed").files[0];
+    const fd = new FormData();
+    fd.append("signed_on", document.getElementById("mn-on").value);
+    fd.append("signed_by", document.getElementById("mn-by").value);
+    if (f) fd.append("paper", f);
+    if (!confirm("Record the minutes as signed? They cannot be changed afterwards.")) return;
+    try { const r = await postForm(`/api/board/meetings/${m.id}/minutes/sign`, fd); await reload(); if (r.email) flash(emailSummary(r.email)); }
+    catch (e) { flash(e.message); }
+  });
+}
 
 /* ------------------------------------------------- Secretariat: circular resolutions */
 function circularDialog(cr, after) {
@@ -412,11 +472,14 @@ screens.portal = async () => {
   const up = PORTAL.meetings.filter(m => m.meeting_date >= today && m.status !== "cancelled").reverse();
   const past = PORTAL.meetings.filter(m => !up.includes(m));
   const waiting = PORTAL.circulars.filter(c => c.status === "open" && !c.my_vote && !c.interested);
+  const minutesWaiting = PORTAL.meetings.filter(m => m.minutes && m.minutes.reply_needed).length;
   const card = m => {
     const st = m.status === "held" ? ["done", "Held"] : m.status === "cancelled" ? ["untracked", "Cancelled"]
       : m.rsvp ? ["later", RSVP[m.rsvp]] : ["soon", "Please say if you will attend"];
     return `<div class="card ${st[0]}"><div><a class="title" href="#pmeeting/${m.id}">${esc(m.title)}</a>
       <div class="meta">${esc(m.body)} &middot; ${whenText(m)}${m.venue ? " &middot; " + esc(m.venue) : ""}</div>
+      ${m.minutes && m.minutes.reply_needed ? `<div class="meta" style="color:var(--magenta)"><strong>Draft minutes waiting for your comments (by ${fmtDate(m.minutes.comments_by)})</strong></div>` : ""}
+      ${m.minutes && m.minutes.stage === "signed" ? `<div class="meta">Signed minutes available</div>` : ""}
       <div class="meta">${m.papers} paper${m.papers === 1 ? "" : "s"}${m.unread ? ` &middot; <strong>${m.unread} not opened yet</strong>` : m.papers ? " &middot; all opened" : ""}${m.revised ? ` &middot; <span style="color:var(--magenta)">${m.revised} revised</span>` : ""}</div></div>
       <div class="due"><span class="pill ${st[0]}">${esc(st[1])}</span></div>
       <div class="actions"><a class="btn" href="#pmeeting/${m.id}">Open the papers</a></div></div>`;
@@ -434,6 +497,7 @@ screens.portal = async () => {
     <h1>Good ${hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening"}, ${esc(ME.full_name)}.</h1>
     <p class="lead">Your Board and committee papers. They are confidential: please do not forward or print copies for others.</p>
     ${waiting.length ? `<div class="banner warn"><strong>${waiting.length} resolution${waiting.length > 1 ? "s" : ""} by circulation waiting for your reply.</strong></div>` : ""}
+    ${minutesWaiting ? `<div class="banner warn"><strong>Draft minutes of ${minutesWaiting} meeting${minutesWaiting > 1 ? "s" : ""} waiting for your comments.</strong> See Earlier meetings below.</div>` : ""}
     <h2>Coming meetings</h2><div class="cards">${up.length ? up.map(card).join("") : `<div class="banner info">No meetings have been published to you yet.</div>`}</div>
     ${PORTAL.circulars.length ? `<h2>Resolutions by circulation</h2><div class="cards">${PORTAL.circulars.map(ccard).join("")}</div>` : ""}
     ${past.length ? `<h2>Earlier meetings</h2><div class="cards">${past.map(card).join("")}</div>` : ""}
@@ -474,6 +538,7 @@ screens.pmeeting = async (id) => {
       <div class="choices" id="rsvp">${Object.entries(RSVP).map(([k, l]) => `<label class="choice ${pm.rsvp && pm.rsvp.response === k ? "selected" : ""}"><input type="radio" name="rsvp" value="${k}" ${pm.rsvp && pm.rsvp.response === k ? "checked" : ""}><span>${esc(l)}</span></label>`).join("")}</div>
       <label class="field">Message to the Company Secretary (optional)</label><input type="text" id="rsvp-note" value="${esc(pm.rsvp ? pm.rsvp.note || "" : "")}" placeholder="e.g. I will join from Delhi">
       <div class="btn-row"><button class="btn" id="rsvp-save">Send my reply</button><span class="meta" id="rsvp-msg">${pm.rsvp ? "Reply sent on " + esc(pm.rsvp.at.replace("T", " ").slice(0, 16)) : ""}</span></div></div>` : ""}
+    ${portalMinutesHtml(m, pm.minutes)}
     <h2>Agenda</h2>
     <div class="cards">${pm.items.map((it, n) => `<div class="card ${it.revised ? "overdue" : it.read || !it.paper_name ? "later" : "soon"}">
       <div><div class="title">${n + 1}. ${esc(it.title)}</div>
@@ -502,6 +567,16 @@ screens.pmeeting = async (id) => {
     const pill = card.querySelector(".due .pill");
     if (pill && !pill.classList.contains("overdue")) { pill.className = "pill later"; pill.textContent = "Opened"; }
   }));
+  const minSend = async (kind) => {
+    try {
+      await api(`/api/portal/meetings/${m.id}/minutes/comment`, { method: "POST", body: JSON.stringify({ kind, text: kind === "comment" ? document.getElementById("pmin-text").value : "" }) });
+      flash("Thank you. Your reply has been sent to the Company Secretary."); screens.pmeeting(id);
+    } catch (e) { flash(e.message); }
+  };
+  if (document.getElementById("pmin-send")) {
+    document.getElementById("pmin-send").onclick = () => minSend("comment");
+    document.getElementById("pmin-none").onclick = () => minSend("no_comments");
+  }
   app.querySelectorAll("[data-savenote]").forEach(b => b.onclick = async () => {
     const iid = b.dataset.savenote;
     try {
@@ -510,6 +585,23 @@ screens.pmeeting = async (id) => {
     } catch (e) { flash(e.message); }
   });
 };
+
+function portalMinutesHtml(m, mn) {
+  if (!mn) return "";
+  if (mn.stage === "signed") {
+    return `<div class="step"><div class="label">Minutes</div>
+      <p style="margin-top:0.3rem">Signed by ${esc(mn.signed_by)} on ${fmtDate(mn.signed_on)}.</p>
+      <div class="btn-row"><a class="btn" href="/api/portal/meetings/${m.id}/minutes/file?which=signed" target="_blank" rel="noopener">Open the signed minutes</a></div></div>`;
+  }
+  const r = mn.my_reply;
+  return `<div class="step" id="pmin"><div class="label">Draft minutes for your comments</div>
+    <p style="margin-top:0.3rem">Please read the draft and reply by <strong>${fmtDate(mn.comments_by)}</strong>.</p>
+    <div class="btn-row"><a class="btn" href="/api/portal/meetings/${m.id}/minutes/file?which=draft" target="_blank" rel="noopener">Open the draft minutes</a></div>
+    ${r ? `<div class="banner info">You replied ${r.kind === "no_comments" ? "<strong>No comments</strong>" : "with comments"} on ${esc(r.at.replace("T", " ").slice(0, 16))}. You can send another reply below.</div>` : ""}
+    <label class="field" for="pmin-text">Your comments on the draft</label>
+    <textarea id="pmin-text" placeholder="e.g. Item 4: please record that I asked for the receivables ageing to be placed at the next meeting."></textarea>
+    <div class="btn-row"><button class="btn" id="pmin-send">Send my comments</button><button class="btn light" id="pmin-none">I have no comments</button></div></div>`;
+}
 
 screens.pcircular = async (id) => {
   app.innerHTML = `<p class="lead">Loading...</p>`;

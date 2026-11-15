@@ -1022,6 +1022,68 @@ def board_note_circulars(mid: int):
     return jsonify({"id": iid})
 
 
+@app.post("/api/board/meetings/<int:mid>/minutes/draft")
+def board_minutes_draft(mid: int):
+    m = _meeting_or_404(mid)
+    paper = _paper_upload()
+    if not paper:
+        return jsonify({"error": "Please choose the draft minutes file."}), 400
+    try:
+        board.save_minutes_draft(mid, paper, _who())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Uploaded draft minutes", f"#{mid} {m['title']}")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/board/meetings/<int:mid>/minutes/circulate")
+def board_minutes_circulate(mid: int):
+    m = _meeting_or_404(mid)
+    try:
+        mn = board.circulate_minutes(mid, _who(), _today())
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Circulated draft minutes", f"#{mid} {m['title']} v{mn['version']}")
+    return jsonify({"ok": True, "email": _auto_email("minutes_draft", "meeting", m | {"comments_by": mn["comments_by"]},
+                                                      m["invitees"])})
+
+
+@app.post("/api/board/meetings/<int:mid>/minutes/sign")
+def board_minutes_sign(mid: int):
+    m = _meeting_or_404(mid)
+    f = request.form
+    paper = _paper_upload()
+    try:
+        mn = board.sign_minutes(mid, f.get("signed_on", ""), f.get("signed_by", ""), paper, _who())
+    except board.BoardError as e:
+        return _board_error(e)
+    # Keep the signed minutes in the document library too, in the Board meetings folder.
+    try:
+        doc_id = library.add_document(paper[0], paper[1], category="board", user=_who(),
+                                      title=f"Signed minutes - {m['title']} ({m['meeting_date']})",
+                                      description=f"Signed by {mn['signed_by']} on {mn['signed_on']}. Added from Board meetings.",
+                                      tags="minutes, signed", doc_date=m["meeting_date"])
+        board.set_minutes_library_doc(mid, doc_id)
+    except library.LibraryError:
+        doc_id = None
+    store.log(_who(), "Recorded signed minutes", f"#{mid} {m['title']} signed {mn['signed_on']} by {mn['signed_by']}")
+    return jsonify({"ok": True, "library_doc_id": doc_id,
+                    "email": _auto_email("minutes_final", "meeting", m, m["invitees"])})
+
+
+def _minutes_file(mid: int, which: str):
+    mn = board.get_minutes(mid) or {}
+    if which == "signed":
+        return _send_paper(mn.get("signed_stored"), mn.get("signed_name"), mn.get("signed_mime"), request.args.get("download") == "1")
+    return _send_paper(mn.get("draft_stored"), mn.get("draft_name"), mn.get("draft_mime"), request.args.get("download") == "1")
+
+
+@app.get("/api/board/meetings/<int:mid>/minutes/file")
+def board_minutes_file(mid: int):
+    _meeting_or_404(mid)
+    return _minutes_file(mid, request.args.get("which", "draft"))
+
+
 @app.get("/api/board/items/<int:iid>/paper")
 def board_item_paper(iid: int):
     it = board.get_item(iid)
@@ -1190,6 +1252,29 @@ def portal_pack(mid: int):
             board.record_view(it["id"], _uid())
     store.log(_who(), "Downloaded Board pack", f"#{mid} {m['title']}")
     return _pack_response(data, m)
+
+
+@app.get("/api/portal/meetings/<int:mid>/minutes/file")
+def portal_minutes_file(mid: int):
+    m = _portal_meeting_or_404(mid)
+    pm = board.portal_minutes(mid, _uid())
+    which = request.args.get("which", "draft")
+    if not pm or (which == "signed" and pm["stage"] != "signed") or (which == "draft" and pm["stage"] != "circulated"):
+        abort(404)
+    store.log(_who(), "Opened minutes", f"#{mid} {m['title']} ({which})")
+    return _minutes_file(mid, which)
+
+
+@app.post("/api/portal/meetings/<int:mid>/minutes/comment")
+def portal_minutes_comment(mid: int):
+    m = _portal_meeting_or_404(mid)
+    b = request.get_json(force=True)
+    try:
+        board.comment_on_minutes(mid, _uid(), b.get("kind", ""), b.get("text", ""))
+    except board.BoardError as e:
+        return _board_error(e)
+    store.log(_who(), "Replied on draft minutes", f"#{mid} {m['title']}: {b.get('kind')}")
+    return jsonify({"ok": True})
 
 
 @app.get("/api/portal/circulars/<int:cid>")
